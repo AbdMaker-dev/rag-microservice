@@ -9,11 +9,8 @@ asyncpg==0.30.0
 
 # Lecture de documents.
 # pdfplumber connaît les coordonnées de chaque mot : indispensable pour les
-# programmes officiels, qui sont des tableaux. pypdfium2 rend les pages en
-# image quand il faut les faire relire par le modèle de vision.
+# programmes officiels, qui sont des tableaux.
 pdfplumber==0.11.10
-pypdfium2==5.13.0
-pillow==12.3.0
 python-docx==1.2.0
 
 # Découpage conscient des tokens. Optionnel au runtime : le chunking retombe

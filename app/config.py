@@ -36,9 +36,8 @@ class Settings(BaseSettings):
     service_shared_secret: str = Field(min_length=32)
 
     # --- Database (read-only) -----------------------------------------------------
-    # Retrieval reads document_chunks and pedagogical_documents. Writes stay in
-    # the NestJS transaction that owns provenance and audit; provision this URL
-    # with a role that has SELECT only.
+    # Base propre au service : chunks, vecteurs et périmètres. Elle ne contient
+    # ni cours publiés, ni élèves, ni droits — ceux-là restent chez LawalSchool.
     database_url: str
     database_pool_min: int = Field(default=1, ge=1, le=32)
     database_pool_max: int = Field(default=8, ge=1, le=64)
@@ -46,7 +45,7 @@ class Settings(BaseSettings):
 
     # --- Inference backends -------------------------------------------------------
     llm_provider: Literal["ollama", "vllm", "none"] = "ollama"
-    llm_model: str = "qwen2.5vl:7b"
+    llm_model: str = "qwen2.5:7b"
     embedding_provider: Literal["ollama", "vllm"] = "ollama"
     embedding_model: str = "bge-m3"
     ollama_base_url: str = "http://localhost:11434"
@@ -75,32 +74,20 @@ class Settings(BaseSettings):
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ]
 
-    # --- Lecture de pages par vision -----------------------------------------------
-    # Le même modèle que la génération : Qwen2.5-VL lit les pages dont la
-    # couche texte est absente ou corrompue, en regardant l'image rendue.
-    vision_enabled: bool = True
-    vision_model: str = "qwen2.5vl:7b"
-    vision_timeout_s: float = Field(default=300.0, ge=10.0, le=3600.0)
-    # 1.5 suffit à lire un tableau ; au-delà, le nombre de jetons visuels
-    # explose sans gain de lisibilité.
-    vision_render_scale: float = Field(default=1.5, ge=0.5, le=4.0)
-    # Fenêtre de contexte réservée à la lecture d'une page.
-    vision_context_tokens: int = Field(default=16_384, ge=2_048, le=131_072)
-    vision_max_output_tokens: int = Field(default=4_096, ge=256, le=32_768)
-    # Au-delà, on renonce : relire 200 pages une par une prendrait des heures.
-    vision_max_pages: int = Field(default=120, ge=1, le=2_000)
-    # En dessous de ce score, une page est jugée illisible et repasse en vision.
-    vision_quality_threshold: float = Field(default=0.80, ge=0.0, le=1.0)
-
-    # --- OCR ----------------------------------------------------------------------
-    # Les programmes officiels sont souvent des scans sans couche texte.
-    # L'OCR n'est tenté que dans ce cas, jamais sur un PDF déjà lisible.
-    ocr_enabled: bool = True
-    ocr_languages: str = "fra+eng"
-    ocr_timeout_s: float = Field(default=180.0, ge=10.0, le=1800.0)
-    # En dessous de ce nombre de caractères par page, on considère que le PDF
-    # n'a pas de vraie couche texte.
-    ocr_min_characters_per_page: int = Field(default=40, ge=0, le=5_000)
+    # --- Réparation du texte extrait ------------------------------------------------
+    # Certains PDF déclarent mal leurs polices et rendent un texte illisible.
+    # Le modèle de langue rétablit les accents à partir du contexte : bien plus
+    # rapide que faire relire l'image, au prix des tableaux et des formules,
+    # dont l'information est perdue avant lui.
+    repair_enabled: bool = True
+    repair_model: str = "qwen2.5:7b"
+    repair_timeout_s: float = Field(default=300.0, ge=10.0, le=3600.0)
+    repair_context_tokens: int = Field(default=8_192, ge=2_048, le=131_072)
+    repair_max_output_tokens: int = Field(default=4_096, ge=256, le=32_768)
+    # Au-delà, on renonce : réparer page par page prendrait des heures.
+    repair_max_pages: int = Field(default=40, ge=1, le=500)
+    # En dessous de ce score, une page est jugée illisible et part en réparation.
+    repair_quality_threshold: float = Field(default=0.90, ge=0.0, le=1.0)
 
     # --- Observability ------------------------------------------------------------
     # Prompts, questions and chunk contents are pedagogical material tied to

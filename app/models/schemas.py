@@ -72,7 +72,7 @@ class ExtractionQuality(Wire):
     score: float
     word_plausibility: float
     cid_markers: int
-    pages_read_by_vision: List[int] = []
+    pages_repaired: List[int] = []
 
 
 class ExtractResponse(Wire):

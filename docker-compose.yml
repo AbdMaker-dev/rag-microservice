@@ -34,8 +34,8 @@ services:
     environment:
       OLLAMA_FLASH_ATTENTION: '1'
       OLLAMA_KV_CACHE_TYPE: q8_0
-      # Un seul modèle sert la génération et la lecture de pages ; le modèle
-      # d'embedding est petit et peut rester chargé à côté.
+      # Deux modèles chargés : le modèle de langue et celui d'embedding,
+      # qui est petit.
       OLLAMA_MAX_LOADED_MODELS: '2'
       OLLAMA_KEEP_ALIVE: 30m
       # Une page de PDF produit un long contexte visuel.
@@ -63,7 +63,7 @@ services:
       OLLAMA_HOST: http://ollama:11434
     entrypoint: >
       /bin/sh -c "
-      ollama pull ${LLM_MODEL:-qwen2.5vl:7b};
+      ollama pull ${LLM_MODEL:-qwen2.5:7b};
       ollama pull ${EMBEDDING_MODEL:-bge-m3};
       "
     restart: 'no'
@@ -85,8 +85,8 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-rag}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ragdb}
       OLLAMA_BASE_URL: http://ollama:11434
       ENVIRONMENT: ${ENVIRONMENT:-development}
-      LLM_MODEL: ${LLM_MODEL:-qwen2.5vl:7b}
-      VISION_MODEL: ${VISION_MODEL:-qwen2.5vl:7b}
+      LLM_MODEL: ${LLM_MODEL:-qwen2.5:7b}
+      REPAIR_MODEL: ${REPAIR_MODEL:-qwen2.5:7b}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-bge-m3}
     volumes:
       # Voix Piper embarquées, montées en lecture seule.

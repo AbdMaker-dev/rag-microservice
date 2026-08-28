@@ -160,10 +160,10 @@ def needs_ocr(text: str, page_count: int, minimum_per_page: int) -> bool:
 
 
 def load_pdf(payload: bytes, **_ignored) -> str:
-    """Lecture simple d'un PDF, sans relecture par vision.
+    """Lecture simple d'un PDF, sans réparation.
 
-    La route `/extract` utilise `read_pdf_pages` puis la vision quand une page
-    le mérite. Cette fonction reste pour les usages hors ligne : scripts,
+    La route `/extract` utilise `read_pdf_pages` puis répare les pages
+    illisibles. Cette fonction reste pour les usages hors ligne : scripts,
     tests, exploration.
     """
 

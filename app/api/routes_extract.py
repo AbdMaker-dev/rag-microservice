@@ -1,11 +1,8 @@
 """POST /extract — document -> texte structuré.
 
-Deux voies, choisies automatiquement :
-
-  * `pdfplumber` lit la couche texte et les tableaux, avec leurs coordonnées.
-    Rapide, exact, c'est le cas courant.
-  * quand une page n'a pas de couche texte, ou qu'elle est illisible parce
-    que ses polices sont mal déclarées, le modèle de vision relit l'image.
+`pdfplumber` lit la couche texte et les tableaux avec leurs coordonnées.
+Quand une page ressort illisible — polices mal déclarées, accents remplacés
+par des caractères parasites — le modèle de langue la réécrit.
 
 Sans état : rien n'est stocké. Le texte est rendu à l'appelant avec une note
 de qualité, et c'est le prof qui relit avant d'indexer.
@@ -30,7 +27,7 @@ from app.core.extraction import (
     to_sections,
 )
 from app.core.quality import assess, corrupted_pages
-from app.core.vision import VisionUnavailable, render_pages
+from app.core.repair import RepairUnavailable
 from app.models.schemas import (
     ExtractedSection,
     ExtractionQuality,
@@ -67,49 +64,51 @@ def _decode(request: ExtractRequest, settings: Settings) -> bytes:
 async def _extract_pdf(
     payload: bytes, request: Request, settings: Settings
 ) -> tuple:
-    """Lire un PDF, page par page, en relisant par vision celles qui le méritent."""
+    """Lire un PDF, page par page, en réparant celles qui sont illisibles."""
 
     pages = read_pdf_pages(payload)
     warnings: list = []
 
-    if not settings.vision_enabled:
+    if not settings.repair_enabled:
         return clean_ocr_text(assemble(pages)), [], warnings
 
-    # Une page vide n'a pas de couche texte ; une page mal notée en a une mais
-    # illisible. Les deux cas se traitent pareil : on regarde l'image.
-    to_reread = sorted(
-        set(index for index, page in enumerate(pages, start=1) if not page.strip())
-        | set(corrupted_pages(pages, plausibility_floor=settings.vision_quality_threshold))
-    )
+    # Une page vide n'a pas de couche texte du tout : rien à réparer, seule
+    # une relecture de l'image la sauverait, et on y a renoncé.
+    damaged = [
+        number
+        for number in corrupted_pages(
+            pages, plausibility_floor=settings.repair_quality_threshold
+        )
+        if pages[number - 1].strip()
+    ]
 
-    if not to_reread:
+    if not damaged:
         return clean_ocr_text(assemble(pages)), [], warnings
 
-    if len(to_reread) > settings.vision_max_pages:
-        warnings.append("TOO_MANY_PAGES_FOR_VISION")
+    if len(damaged) > settings.repair_max_pages:
+        warnings.append("TOO_MANY_PAGES_TO_REPAIR")
         logger.warning(
-            "trop de pages à relire, vision abandonnée",
-            extra={"pages": len(to_reread), "limit": settings.vision_max_pages},
+            "trop de pages à réparer, on garde le texte brut",
+            extra={"pages": len(damaged), "limit": settings.repair_max_pages},
         )
         return clean_ocr_text(assemble(pages)), [], warnings
 
-    reader = request.app.state.vision
+    repairer = request.app.state.repairer
     try:
-        images = render_pages(payload, to_reread, scale=settings.vision_render_scale)
-        transcriptions = await reader.read_pages(images)
-    except VisionUnavailable as error:
-        logger.warning("vision indisponible, on garde la couche texte")
-        warnings.append("VISION_UNAVAILABLE")
+        repaired = await repairer.repair_pages([pages[n - 1] for n in damaged])
+    except RepairUnavailable:
+        logger.warning("réparation indisponible, on garde le texte brut")
+        warnings.append("REPAIR_UNAVAILABLE")
         return clean_ocr_text(assemble(pages)), [], warnings
     except Exception:  # noqa: BLE001
-        logger.exception("échec de la relecture par vision")
-        warnings.append("VISION_FAILED")
+        logger.exception("échec de la réparation")
+        warnings.append("REPAIR_FAILED")
         return clean_ocr_text(assemble(pages)), [], warnings
 
-    for number, transcription in zip(to_reread, transcriptions):
-        pages[number - 1] = transcription
+    for number, text in zip(damaged, repaired):
+        pages[number - 1] = text
 
-    return clean_ocr_text(assemble(pages)), to_reread, warnings
+    return clean_ocr_text(assemble(pages)), damaged, warnings
 
 
 @router.post("/extract", response_model=ExtractResponse)
@@ -119,12 +118,12 @@ async def extract(
     settings: Settings = Depends(get_settings),
 ) -> ExtractResponse:
     payload = _decode(body, settings)
-    read_by_vision: list = []
+    repaired_pages: list = []
     warnings: list = []
 
     try:
         if body.media_type == "application/pdf":
-            text, read_by_vision, warnings = await _extract_pdf(payload, request, settings)
+            text, repaired_pages, warnings = await _extract_pdf(payload, request, settings)
         else:
             text = load(payload, body.media_type)
     except UnsupportedMediaType as error:
@@ -148,7 +147,7 @@ async def extract(
         )
 
     measured = assess(text)
-    if measured.score < settings.vision_quality_threshold:
+    if measured.score < settings.repair_quality_threshold:
         warnings.append("LOW_TEXT_QUALITY")
 
     # Le contenu extrait n'est jamais journalisé : c'est du matériel
@@ -160,7 +159,7 @@ async def extract(
             "mediaType": body.media_type,
             "characters": len(text),
             "quality": measured.score,
-            "visionPages": len(read_by_vision),
+            "repairedPages": len(repaired_pages),
         },
     )
 
@@ -175,7 +174,7 @@ async def extract(
             score=measured.score,
             word_plausibility=measured.word_plausibility,
             cid_markers=measured.cid_markers,
-            pages_read_by_vision=read_by_vision,
+            pages_repaired_pages=repaired_pages,
         ),
         warnings=warnings,
     )
