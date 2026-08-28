@@ -1,0 +1,21 @@
+# Épinglé exactement, comme le monorepo épingle ses dépendances npm.
+# Toute montée de version est délibérée, jamais par intervalle flottant.
+fastapi==0.120.4
+uvicorn[standard]==0.41.0
+pydantic==2.13.2
+pydantic-settings==2.13.0
+httpx==0.28.1
+asyncpg==0.30.0
+
+# Lecture de documents.
+# pdfplumber connaît les coordonnées de chaque mot : indispensable pour les
+# programmes officiels, qui sont des tableaux. pypdfium2 rend les pages en
+# image quand il faut les faire relire par le modèle de vision.
+pdfplumber==0.11.10
+pypdfium2==5.13.0
+pillow==12.3.0
+python-docx==1.2.0
+
+# Découpage conscient des tokens. Optionnel au runtime : le chunking retombe
+# sur une heuristique déterministe en son absence.
+tiktoken==0.13.0
