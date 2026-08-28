@@ -67,16 +67,21 @@ services:
 
   api:
     build: .
+    # Tout le .env est transmis au conteneur, sinon les réglages qui n'ont pas
+    # de ligne dans `environment` seraient silencieusement ignorés.
+    env_file:
+      - .env
     depends_on:
       postgres:
         condition: service_healthy
       ollama:
         condition: service_healthy
     environment:
-      ENVIRONMENT: ${ENVIRONMENT:-development}
-      SERVICE_SHARED_SECRET: ${SERVICE_SHARED_SECRET:?SERVICE_SHARED_SECRET requis}
+      # Ces trois valeurs écrasent le .env : à l'intérieur du réseau Docker,
+      # les services se joignent par leur nom, pas par localhost.
       DATABASE_URL: postgresql://${POSTGRES_USER:-rag}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ragdb}
       OLLAMA_BASE_URL: http://ollama:11434
+      ENVIRONMENT: ${ENVIRONMENT:-development}
       LLM_MODEL: ${LLM_MODEL:-qwen2.5vl:7b}
       VISION_MODEL: ${VISION_MODEL:-qwen2.5vl:7b}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-bge-m3}
