@@ -74,7 +74,14 @@ class VisionReader:
         payload = {
             "model": self.model,
             "stream": False,
-            "options": {"temperature": 0},
+            "options": {
+                "temperature": 0,
+                # Une page rendue en image produit beaucoup de jetons visuels.
+                # Avec la fenêtre par défaut d'Ollama, le moteur natif dépasse
+                # sa mémoire de travail et s'arrête brutalement.
+                "num_ctx": self._settings.vision_context_tokens,
+                "num_predict": self._settings.vision_max_output_tokens,
+            },
             "messages": [
                 {
                     "role": "user",

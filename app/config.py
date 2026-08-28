@@ -81,7 +81,12 @@ class Settings(BaseSettings):
     vision_enabled: bool = True
     vision_model: str = "qwen2.5vl:7b"
     vision_timeout_s: float = Field(default=300.0, ge=10.0, le=3600.0)
-    vision_render_scale: float = Field(default=2.0, ge=1.0, le=4.0)
+    # 1.5 suffit à lire un tableau ; au-delà, le nombre de jetons visuels
+    # explose sans gain de lisibilité.
+    vision_render_scale: float = Field(default=1.5, ge=0.5, le=4.0)
+    # Fenêtre de contexte réservée à la lecture d'une page.
+    vision_context_tokens: int = Field(default=16_384, ge=2_048, le=131_072)
+    vision_max_output_tokens: int = Field(default=4_096, ge=256, le=32_768)
     # Au-delà, on renonce : relire 200 pages une par une prendrait des heures.
     vision_max_pages: int = Field(default=120, ge=1, le=2_000)
     # En dessous de ce score, une page est jugée illisible et repasse en vision.
