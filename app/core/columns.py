@@ -1,0 +1,324 @@
+"""Lire une page en colonnes, sans se fier aux filets.
+
+Certains PDF dessinent leurs tableaux sans les tracer : les colonnes ne sont
+séparées que par du blanc. `find_tables()` y échoue, et pire, il y voit des
+tableaux là où il n'y a que des barres de fraction — sur les 99 pages du
+programme national de mathématiques, aucun filet n'atteint la moitié de la
+largeur de page.
+
+On lit donc la disposition elle-même : les gouttières de blanc qui traversent
+la page, puis les bandes horizontales qui coupent toutes les colonnes en même
+temps.
+
+**Tous les seuils sont des rapports**, calculés sur le document. Une constante
+en points décrit une seule mise en page ; un rapport à l'interligne ou à la
+largeur d'espace suit le document qu'on lui donne.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from statistics import median
+from typing import Dict, List, Optional, Sequence, Tuple
+
+logger = logging.getLogger(__name__)
+
+# --- Rapports, et ce qu'ils valent sur le programme national ----------------
+# Mesuré sur ce document : hauteur de ligne 10,8 pt, largeur d'espace 2,7 pt,
+# interligne 12,5 pt. Les rapports ci-dessous y donnent 2,7 / 4,1 / 7,5 pt.
+_LINE_MERGE = 0.25    # × hauteur de ligne : deux mots sur la même ligne visuelle
+_GUTTER_MIN = 1.5     # × largeur d'espace : en deçà, c'est un espace, pas une colonne
+_GUTTER_MERGE = 4.5   # × largeur d'espace : deux gouttières voisines n'en font qu'une
+_ROW_BREAK = 0.6      # × interligne : un vide qui traverse tout coupe une ligne
+
+# Une gouttière tolère quelques débordements — une formule qui dépasse ne doit
+# pas faire disparaître la colonne pour toute la page.
+_GUTTER_TOLERANCE = 0.10
+# Et elle doit avoir du texte des deux côtés, sinon c'est une marge.
+_GUTTER_USED = 0.12
+# Une colonne confirmée sur assez de pages devient le gabarit du document.
+_TEMPLATE_SHARE = 0.25
+
+
+@dataclass(frozen=True)
+class Metrics:
+    """Les grandeurs du document, dont tous les seuils se déduisent."""
+
+    line_height: float = 10.0
+    space_width: float = 2.5
+    line_gap: float = 12.0
+
+    @property
+    def merge(self) -> float:
+        return self.line_height * _LINE_MERGE
+
+    @property
+    def gutter_min(self) -> float:
+        return self.space_width * _GUTTER_MIN
+
+    @property
+    def gutter_merge(self) -> float:
+        return self.space_width * _GUTTER_MERGE
+
+    @property
+    def row_break(self) -> float:
+        return self.line_gap * _ROW_BREAK
+
+
+def measure(pages_words: Sequence[Sequence[dict]]) -> Metrics:
+    """Établir les grandeurs du document à partir de ses mots."""
+
+    heights: List[float] = []
+    spaces: List[float] = []
+    gaps: List[float] = []
+
+    for words in pages_words:
+        if not words:
+            continue
+        for word in words:
+            heights.append(word["bottom"] - word["top"])
+
+        rows: Dict[int, List[dict]] = {}
+        for word in words:
+            rows.setdefault(round(word["top"] / 3), []).append(word)
+        tops: List[float] = []
+        for group in rows.values():
+            group.sort(key=lambda item: item["x0"])
+            for left, right in zip(group, group[1:]):
+                gap = right["x0"] - left["x1"]
+                if 0 < gap < 40:
+                    spaces.append(gap)
+            tops.append(min(item["top"] for item in group))
+        tops.sort()
+        for above, below in zip(tops, tops[1:]):
+            if 0 < below - above < 60:
+                gaps.append(below - above)
+
+    return Metrics(
+        line_height=median(heights) if heights else 10.0,
+        space_width=median(spaces) if spaces else 2.5,
+        line_gap=median(gaps) if gaps else 12.0,
+    )
+
+
+def visual_lines(words: Sequence[dict], metrics: Metrics) -> List[List[dict]]:
+    """Regrouper les mots en lignes visuelles."""
+
+    if not words:
+        return []
+    ordered = sorted(words, key=lambda item: (item["top"], item["x0"]))
+    lines: List[List[dict]] = [[ordered[0]]]
+    for word in ordered[1:]:
+        if abs(word["top"] - lines[-1][0]["top"]) <= metrics.merge:
+            lines[-1].append(word)
+        else:
+            lines.append([word])
+    for line in lines:
+        line.sort(key=lambda item: item["x0"])
+    return lines
+
+
+def gutters(lines: Sequence[Sequence[dict]], width: float, metrics: Metrics) -> List[Tuple[float, float]]:
+    """Trouver les bandes de blanc qui traversent la page.
+
+    On ne compte pas les lignes pleine largeur : un paragraphe de prose
+    couvrirait toutes les abscisses et effacerait les gouttières.
+    """
+
+    if not lines:
+        return []
+
+    narrow = [line for line in lines if _span(line) < width * 0.85]
+    if len(narrow) < 3:
+        return []
+
+    columns = int(width) + 1
+    cover = [0] * columns
+    for line in narrow:
+        for word in line:
+            for x in range(max(0, int(word["x0"])), min(columns, int(word["x1"]) + 1)):
+                cover[x] += 1
+
+    ceiling = max(1, int(len(narrow) * _GUTTER_TOLERANCE))
+    bands: List[Tuple[float, float]] = []
+    start: Optional[int] = None
+    for x in range(columns):
+        if cover[x] <= ceiling:
+            start = x if start is None else start
+        elif start is not None:
+            bands.append((float(start), float(x)))
+            start = None
+    if start is not None:
+        bands.append((float(start), float(columns)))
+
+    # Les bandes trop étroites sont des espaces entre mots ; les bandes
+    # voisines décrivent la même séparation vue à travers plusieurs lignes.
+    wide = [band for band in bands if band[1] - band[0] >= metrics.gutter_min]
+    merged: List[Tuple[float, float]] = []
+    for band in wide:
+        if merged and band[0] - merged[-1][1] <= metrics.gutter_merge:
+            merged[-1] = (merged[-1][0], band[1])
+        else:
+            merged.append(band)
+
+    # Une gouttière sans texte des deux côtés est une marge, pas une colonne.
+    kept: List[Tuple[float, float]] = []
+    for left, right in merged:
+        both = sum(
+            1
+            for line in narrow
+            if any(word["x1"] <= left for word in line)
+            and any(word["x0"] >= right for word in line)
+        )
+        if both >= len(narrow) * _GUTTER_USED:
+            kept.append((left, right))
+    return kept
+
+
+def _span(line: Sequence[dict]) -> float:
+    return max(word["x1"] for word in line) - min(word["x0"] for word in line)
+
+
+def template(page_gutters: Sequence[Sequence[Tuple[float, float]]], pages: int,
+             metrics: Metrics) -> List[float]:
+    """Le nombre de colonnes usuel du document, et leurs positions médianes.
+
+    Les colonnes d'un même document ne tombent pas forcément aux mêmes
+    abscisses : dans le programme national, chaque tableau a ses propres
+    largeurs — 209 et 351 sur une page, 258 et 383 sur la suivante. Chercher
+    des positions communes n'y donne rien.
+
+    Le gabarit ne sert donc qu'à secourir une page qui n'a rien trouvé : il
+    retient le nombre de colonnes le plus fréquent, et pour chaque rang la
+    position médiane observée.
+    """
+
+    par_rang: Dict[int, List[float]] = {}
+    comptes: Dict[int, int] = {}
+    for gutters_ in page_gutters:
+        if not gutters_:
+            continue
+        comptes[len(gutters_)] = comptes.get(len(gutters_), 0) + 1
+        for rank, (left, right) in enumerate(gutters_):
+            par_rang.setdefault(rank, []).append((left + right) / 2)
+
+    if not comptes:
+        return []
+    usuel = max(comptes, key=lambda k: comptes[k])
+    if comptes[usuel] < max(2, int(pages * _TEMPLATE_SHARE)):
+        return []
+    return [median(par_rang[rank]) for rank in range(usuel) if rank in par_rang]
+
+
+def furniture(pages_lines: Sequence[Sequence[Sequence[dict]]]) -> set:
+    """Les lignes d'habillage : en-têtes et pieds de page.
+
+    Elles doivent être écartées **avant** le découpage en colonnes, sinon un
+    pied de page se retrouve haché en cellules et devient une ligne de tableau
+    de plus — impossible à reconnaître ensuite.
+
+    Le discriminant n'est pas la position : dans le programme national,
+    l'en-tête du tableau est à 5 % de la hauteur et le pied de page à 75 %.
+    C'est le **numéro de page** qui trahit l'habillage — une ligne qui revient
+    à l'identique sauf un chiffre est un titre courant, tandis que la ligne
+    « Contenus Commentaires Compétences exigibles », qui revient elle aussi
+    mais sans aucun chiffre, est un vrai en-tête de tableau.
+
+    Limite connue : un pied de page sans numéro échappe à ce critère. Il sera
+    alors rendu en prose et retiré plus tard par le nettoyage, qui repère les
+    lignes répétées — à condition qu'il n'ait pas été haché en cellules avant.
+    """
+
+    from collections import Counter
+
+    seen: Counter = Counter()
+    pages = len(pages_lines)
+    for lines in pages_lines:
+        edges = list(lines[:2]) + list(lines[-3:])
+        for line in edges:
+            text = " ".join(word["text"] for word in line).strip()
+            # Les chiffres varient d'une page à l'autre : « page 12 » et
+            # « page 13 » sont le même habillage.
+            normalised = "".join("#" if character.isdigit() else character for character in text)
+            # Sans chiffre, ce n'est pas un titre courant : c'est du contenu
+            # qui se répète, typiquement l'en-tête d'un tableau reconduit de
+            # page en page.
+            if 8 <= len(normalised) <= 120 and any(c.isdigit() for c in text):
+                seen[normalised] += 1
+
+    # Seuil bas : un pied de page change souvent avec la partie du document,
+    # et chaque variante ne couvre alors qu'une fraction des pages.
+    minimum = max(3, int(pages * 0.04))
+    return {text for text, count in seen.items() if count >= minimum}
+
+
+def _is_furniture(line: Sequence[dict], known: set) -> bool:
+    text = " ".join(word["text"] for word in line).strip()
+    return "".join("#" if c.isdigit() else c for c in text) in known
+
+
+def render(lines: Sequence[Sequence[dict]], boundaries: Sequence[float],
+           width: float, metrics: Metrics, known_furniture: Optional[set] = None) -> str:
+    """Rendre une page : les lignes pleine largeur en prose, le reste en cellules."""
+
+    if not lines:
+        return ""
+    if not boundaries:
+        return "\n".join(" ".join(word["text"] for word in line) for line in lines)
+
+    edges = [0.0] + list(boundaries) + [width]
+    out: List[str] = []
+    buffer: List[List[List[str]]] = []
+
+    def flush() -> None:
+        for row in buffer:
+            if any(cell for cell in row):
+                out.append("| " + " | ".join(" ".join(cell) for cell in row) + " |")
+        buffer.clear()
+
+    known_furniture = known_furniture or set()
+    previous_bottom: Optional[float] = None
+    for line in lines:
+        # L'habillage est rendu en prose, jamais haché en cellules : découpé,
+        # il deviendrait une ligne de tableau impossible à reconnaître ensuite.
+        if _is_furniture(line, known_furniture):
+            flush()
+            out.append(" ".join(word["text"] for word in line))
+            previous_bottom = max(word["bottom"] for word in line)
+            continue
+        # Une ligne qui traverse toute la page est de la prose, pas une ligne
+        # de tableau : la découper aux frontières la hacherait.
+        if _span(line) >= width * 0.85:
+            flush()
+            out.append(" ".join(word["text"] for word in line))
+            previous_bottom = max(word["bottom"] for word in line)
+            continue
+
+        top = min(word["top"] for word in line)
+        if previous_bottom is not None and top - previous_bottom > metrics.row_break:
+            flush()
+        if not buffer:
+            buffer.append([[] for _ in range(len(edges) - 1)])
+
+        for word in line:
+            buffer[-1][_column_of(word, edges)].append(word["text"])
+        previous_bottom = max(word["bottom"] for word in line)
+
+    flush()
+    return "\n".join(out)
+
+
+def _column_of(word: dict, edges: Sequence[float]) -> int:
+    """La colonne d'un mot, par recouvrement — jamais par son centre.
+
+    Un mot court posé au bord d'une gouttière basculerait sinon dans la
+    colonne voisine.
+    """
+
+    best, score = 0, -1.0
+    for index in range(len(edges) - 1):
+        overlap = min(word["x1"], edges[index + 1]) - max(word["x0"], edges[index])
+        if overlap > score:
+            best, score = index, overlap
+    return best

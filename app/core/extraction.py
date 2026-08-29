@@ -24,7 +24,7 @@ from app.core.encoding import RepairPlan, apply_plan, build_plan
 from app.core.pdf_encoding import repair_pdf
 from app.core.pdf_profile import PdfProfile, is_tagged, measure_page
 from app.core.struct_tree import TreeHealth, inspect
-from app.core import tagged_reader
+from app.core import columns, tagged_reader
 from app.core.quality import assess
 
 _CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -166,6 +166,29 @@ class PdfReading:
     read_by_tree: bool = False
 
 
+def _read_columns(pages_words: List[list], widths: List[float]) -> List[str]:
+    """Rendre le document en suivant ses gouttières de blanc."""
+
+    metrics = columns.measure(pages_words)
+    lines = [columns.visual_lines(words, metrics) for words in pages_words]
+    known = columns.furniture(lines)
+    per_page = [
+        columns.gutters(page_lines, width, metrics)
+        for page_lines, width in zip(lines, widths)
+    ]
+    fallback = columns.template(per_page, len(lines), metrics)
+    return [
+        columns.render(
+            page_lines,
+            [(left + right) / 2 for left, right in found] if found else fallback,
+            width,
+            metrics,
+            known,
+        )
+        for page_lines, found, width in zip(lines, per_page, widths)
+    ]
+
+
 @contextmanager
 def _step(timings: Dict[str, float], name: str):
     """Chronométrer une étape.
@@ -211,6 +234,7 @@ def read_pdf_document(payload: bytes, repair: bool = True) -> PdfReading:
 
     pages: List[str] = []
     pages_words: List[list] = []
+    widths: List[float] = []
     marks: Dict[tuple, List[str]] = defaultdict(list)
     coverages: List[float] = []
     needing_ocr: List[int] = []
@@ -257,7 +281,19 @@ def read_pdf_document(payload: bytes, repair: bool = True) -> PdfReading:
                     if mark is not None:
                         marks[(number, int(mark))].append(word["text"])
 
+                widths.append(float(page.width))
                 measure_page(number, page, words, coverages, needing_ocr, ruled)
+
+    # Sans arbre et sans filets, c'est la disposition qui fait foi. pdfplumber
+    # voit alors des tableaux là où il n'y a que des barres de fraction : sur
+    # les 99 pages du programme national, aucun filet n'atteint la moitié de la
+    # largeur de page. On lit donc les gouttières de blanc.
+    if not ruled and any(pages_words):
+        with _step(timings, "colonnes"):
+            try:
+                pages = _read_columns(pages_words, widths)
+            except Exception:  # noqa: BLE001
+                logger.warning("lecture par colonnes impossible, filets conservés")
 
     # Le document porte-t-il un plan exploitable ? Si oui, on le suit : il
     # donne les cellules d'un tableau sans avoir à les deviner, et désigne son
@@ -456,10 +492,20 @@ def _repeated_lines(pages: list, threshold: float = 0.2) -> set:
             if line.startswith("|"):
                 continue
             if 3 <= len(line) <= 120:
-                counts[line] = counts.get(line, 0) + 1
+                counts[_normalise_digits(line)] = counts.get(_normalise_digits(line), 0) + 1
 
     minimum = max(3, int(len(pages) * threshold))
     return {line for line, count in counts.items() if count >= minimum}
+
+
+def _normalise_digits(line: str) -> str:
+    """« page 12 » et « page 13 » sont le même habillage.
+
+    Sans cette normalisation, un pied de page numéroté n'est jamais reconnu
+    comme répété : chaque page en porte une variante unique.
+    """
+
+    return "".join("#" if character.isdigit() else character for character in line)
 
 
 def _join_broken_lines(text: str) -> str:
@@ -524,7 +570,7 @@ def clean_ocr_text(text: str) -> str:
         if noise:
             kept = []
             for line in text.split("\n"):
-                if line.strip() in noise:
+                if _normalise_digits(line.strip()) in noise:
                     continue
                 kept.append(line)
             text = "\n".join(kept)
