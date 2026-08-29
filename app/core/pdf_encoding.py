@@ -150,6 +150,95 @@ def scan_codes(payload: bytes) -> Dict[str, Counter]:
     return dict(counts)
 
 
+def fonts_with_tounicode(payload: bytes) -> set:
+    """Polices qui déclarent déjà leur table de caractères.
+
+    Une CMap /ToUnicode présente est la parole du producteur du document :
+    elle fait autorité. La contredire revient à corrompre un texte correct —
+    c'est exactement ce qui arrivait sur un document sain, où des polices
+    sous-ensemblées voyaient leurs index de glyphes relus comme du MacRoman.
+    """
+
+    from pypdf import PdfReader
+
+    with_map: set = set()
+    without_map: set = set()
+    try:
+        reader = PdfReader(io.BytesIO(payload))
+        seen: set = set()
+        for page in reader.pages:
+            resources = page.get("/Resources")
+            if resources is None:
+                continue
+            fonts = resources.get_object().get("/Font")
+            if fonts is None:
+                continue
+            for reference in fonts.get_object().values():
+                font = reference.get_object()
+                if id(font) in seen:
+                    continue
+                seen.add(id(font))
+                name = str(font.get("/BaseFont", "")).lstrip("/")
+                (with_map if "/ToUnicode" in font else without_map).add(name)
+    except Exception:  # noqa: BLE001
+        logger.warning("lecture des polices impossible, aucune correction tentée")
+        return set()
+
+    # Un même nom peut désigner plusieurs objets police, les uns déclarant leur
+    # table et les autres non — c'est le cas dans les deux documents de
+    # référence. On n'accorde sa confiance à un nom que si **tous** ses objets
+    # la déclarent ; sinon le diagnostic reste nécessaire pour les autres.
+    return with_map - without_map
+
+
+# Fenêtres Unicode des écritures que l'on sait reconnaître. Le service reçoit
+# des documents du monde entier : noter des candidates « part de caractères
+# latins » sur un texte arabe ou cyrillique choisirait n'importe quoi, et
+# pourrait basculer une police saine vers une table fausse.
+_SCRIPTS = {
+    "latin": ((0x0041, 0x024F),),
+    "greek": ((0x0370, 0x03FF), (0x1F00, 0x1FFF)),
+    "cyrillic": ((0x0400, 0x04FF),),
+    "arabic": ((0x0600, 0x06FF), (0x0750, 0x077F)),
+    "hebrew": ((0x0590, 0x05FF),),
+    "cjk": ((0x3040, 0x30FF), (0x4E00, 0x9FFF), (0xAC00, 0xD7AF)),
+    "devanagari": ((0x0900, 0x097F),),
+}
+
+
+def dominant_script(payload: bytes, trusted: set, pages: int = 20) -> str:
+    """Deviner l'écriture du document à partir de sa portion déjà fiable.
+
+    On ne lit que les polices qui déclarent leur table : celles-là sortent un
+    texte correct, et disent donc la vérité sur la langue du document.
+    """
+
+    import pdfplumber
+
+    tally: Counter = Counter()
+    try:
+        with pdfplumber.open(io.BytesIO(payload)) as document:
+            for page in document.pages[:pages]:
+                for char in page.chars:
+                    if trusted and char.get("fontname") not in trusted:
+                        continue
+                    text = char.get("text") or ""
+                    if not text or not text[0].isalpha():
+                        continue
+                    point = ord(text[0])
+                    for name, spans in _SCRIPTS.items():
+                        if any(low <= point <= high for low, high in spans):
+                            tally[name] += 1
+                            break
+    except Exception:  # noqa: BLE001
+        return "unknown"
+
+    if not tally:
+        return "unknown"
+    name, count = tally.most_common(1)[0]
+    return name if count / sum(tally.values()) >= 0.6 else "mixed"
+
+
 def _character_value(character: str) -> float:
     if character in _MOJIBAKE_SIGNATURE:
         return -1.0
@@ -181,7 +270,12 @@ def is_symbolic(fontname: str) -> bool:
     return any(name in fontname for name in _SYMBOLIC_NAMES)
 
 
-def decide(counts: Dict[str, Counter], current: Dict[str, str]) -> List[FontDecision]:
+def decide(
+    counts: Dict[str, Counter],
+    current: Dict[str, str],
+    trusted: Optional[set] = None,
+    script: str = "latin",
+) -> List[FontDecision]:
     """Déterminer la vraie table de chaque police.
 
     `current` donne la table que le PDF déclare, pour ne la contredire que sur
@@ -189,18 +283,33 @@ def decide(counts: Dict[str, Counter], current: Dict[str, str]) -> List[FontDeci
     corrompre une police déjà correcte.
     """
 
+    trusted = trusted or set()
     decisions: List[FontDecision] = []
+
+    # Nos tables candidates décrivent des écritures latines. Sur un document
+    # arabe, russe ou chinois, les noter n'a aucun sens : on s'abstient.
+    if script not in ("latin", "unknown"):
+        return [
+            FontDecision(name, None, 0.0, sum(counts[name].values()))
+            for name in counts
+        ]
+
     for fontname, codes in counts.items():
         samples = sum(count for code, count in codes.items() if 0x7F < code <= 0xFF)
+
+        # Une police qui déclare déjà sa table fait autorité.
+        if fontname in trusted:
+            decisions.append(FontDecision(fontname, None, 0.0, samples))
+            continue
+
+        if samples < _MINIMUM_SAMPLE:
+            decisions.append(FontDecision(fontname, None, 0.0, samples))
+            continue
 
         if is_symbolic(fontname):
             decisions.append(
                 FontDecision(fontname, "symbol", 1.0, samples, is_symbolic=True)
             )
-            continue
-
-        if samples < _MINIMUM_SAMPLE:
-            decisions.append(FontDecision(fontname, None, 0.0, samples))
             continue
 
         declared = current.get(fontname, "cp1252")
@@ -363,6 +472,12 @@ def rewrite(payload: bytes, decisions: List[FontDecision], counts: Dict[str, Cou
                 continue
             patched.add(identity)
 
+            # Ne jamais écraser la table d'un objet qui en déclare une :
+            # elle fait autorité, même si d'autres objets du même nom n'en ont
+            # pas et ont besoin, eux, d'être corrigés.
+            if "/ToUnicode" in font:
+                continue
+
             base = str(font.get("/BaseFont", "")).lstrip("/")
             decision = plan.get(base)
             if decision is None:
@@ -394,5 +509,12 @@ def repair_pdf(payload: bytes) -> Tuple[bytes, List[FontDecision]]:
     counts = scan_codes(payload)
     if not counts:
         return payload, []
-    decisions = decide(counts, declared_encodings(payload))
+    trusted = fonts_with_tounicode(payload)
+    script = dominant_script(payload, trusted)
+    decisions = decide(counts, declared_encodings(payload), trusted, script)
+    if not any(d.changed for d in decisions):
+        # Rien à corriger : on rend le document tel quel, sans copie. La
+        # plupart des PDF sont correctement encodés et n'ont rien à gagner
+        # à passer par une réécriture.
+        return payload, decisions
     return rewrite(payload, decisions, counts), decisions

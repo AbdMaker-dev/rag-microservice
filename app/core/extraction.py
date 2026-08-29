@@ -17,10 +17,14 @@ from typing import Callable, Dict, List
 
 from app.core.encoding import RepairPlan, apply_plan, build_plan
 from app.core.pdf_encoding import repair_pdf
+from app.core.quality import assess
 
 _CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _EXCESS_BLANK_LINES = re.compile(r"\n{3,}")
 _TRAILING_SPACES = re.compile(r"[ \t]+\n")
+
+# En dessous, le texte est assez mauvais pour justifier le filet de secours.
+_RESCUE_FLOOR = 0.90
 
 
 class UnsupportedMediaType(ValueError):
@@ -73,6 +77,19 @@ def _table_to_markdown(table) -> str:
     return "\n".join(rows)
 
 
+def _clamp(box, page_box):
+    """Ramener une boîte dans les limites de sa page."""
+
+    left, top, right, bottom = box
+    page_left, page_top, page_right, page_bottom = page_box
+    return (
+        max(left, page_left),
+        max(top, page_top),
+        min(right, page_right),
+        min(bottom, page_bottom),
+    )
+
+
 def _read_pdf_text(payload: bytes) -> tuple:
     """Lire un PDF en respectant sa mise en page. Renvoie (texte, nb de pages).
 
@@ -100,7 +117,13 @@ def _read_pdf_text(payload: bytes) -> tuple:
             # Le texte situé hors des tableaux, dans son ordre de lecture.
             outside = page
             for table in tables:
-                outside = outside.outside_bbox(table.bbox)
+                # Un tableau peut déborder la page d'une fraction de point,
+                # par arrondi. pdfplumber refuse alors la découpe et fait
+                # échouer tout le document : on ramène la boîte dans la page.
+                try:
+                    outside = outside.outside_bbox(_clamp(table.bbox, page.bbox))
+                except ValueError:
+                    logger.warning("tableau hors page, découpe ignorée")
             remaining = outside.extract_text(layout=False) or ""
             if remaining.strip():
                 parts.append(remaining.strip())
@@ -152,7 +175,13 @@ def read_pdf_document(payload: bytes, repair: bool = True) -> tuple:
                     parts.append(rendered)
             outside = page
             for table in tables:
-                outside = outside.outside_bbox(table.bbox)
+                # Un tableau peut déborder la page d'une fraction de point,
+                # par arrondi. pdfplumber refuse alors la découpe et fait
+                # échouer tout le document : on ramène la boîte dans la page.
+                try:
+                    outside = outside.outside_bbox(_clamp(table.bbox, page.bbox))
+                except ValueError:
+                    logger.warning("tableau hors page, découpe ignorée")
             remaining = outside.extract_text(layout=False) or ""
             if remaining.strip():
                 parts.append(remaining.strip())
@@ -166,13 +195,17 @@ def read_pdf_document(payload: bytes, repair: bool = True) -> tuple:
                 logger.warning("polices illisibles sur une page, correction ignorée")
                 pages_words.append([])
 
-    plan = build_plan(pages_words) if repair else RepairPlan({}, {}, [])
-    if not plan.is_empty:
-        pages = [apply_plan(page, plan) for page in pages]
-        logger.info(
-            "encodage corrigé",
-            extra={"words": len(plan.words), "unreadableFonts": len(plan.unreadable_fonts)},
-        )
+    # Rattrapage mot à mot : filet de secours, jamais routine. Il ignore les
+    # polices, donc il confond un « ² » légitime avec un symbole Symbol et
+    # écrit « ax≤ » à la place de « ax² ». On ne l'appelle que si la
+    # correction des polices n'a rien pu faire et que le texte reste mauvais.
+    plan = RepairPlan({}, {}, [])
+    if repair and not any(font.changed for font in fonts):
+        if assess(assemble(pages)).score < _RESCUE_FLOOR:
+            plan = build_plan(pages_words)
+            if not plan.is_empty:
+                pages = [apply_plan(page, plan) for page in pages]
+                logger.info("rattrapage mot à mot", extra={"words": len(plan.words)})
     return pages, plan
 
 

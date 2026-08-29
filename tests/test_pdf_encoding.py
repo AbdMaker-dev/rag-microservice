@@ -91,3 +91,44 @@ def test_la_cmap_decoupe_en_blocs_de_cent_au_plus():
 
     assert rendu.count("beginbfchar") == 3
     assert "100 beginbfchar" in rendu
+
+
+def test_ne_contredit_pas_une_police_qui_declare_deja_sa_table():
+    """Une CMap /ToUnicode présente fait autorité.
+
+    Sur un document sain, des polices sous-ensemblées voyaient leurs index de
+    glyphes relus comme du MacRoman : 59 582 caractères corrompus. Le PDF
+    disait déjà comment les lire.
+    """
+
+    codes = Counter({0x8E: 400, 0x8F: 50, 0xC9: 480, 0x41: 900})
+
+    sans_garde = decide({"Times": codes}, {})[0]
+    avec_garde = decide({"Times": codes}, {}, trusted={"Times"})[0]
+
+    assert sans_garde.encoding == "mac_roman"
+    assert avec_garde.encoding is None
+
+
+def test_ne_decide_rien_hors_ecriture_latine():
+    """Nos tables candidates décrivent des écritures latines.
+
+    Sur un document arabe ou cyrillique, les noter choisirait au hasard — et
+    pourrait basculer une police saine vers une table fausse.
+    """
+
+    codes = Counter({0x8E: 400, 0x8F: 50, 0xC9: 480})
+
+    assert decide({"Times": codes}, {}, script="latin")[0].encoding == "mac_roman"
+    for script in ("arabic", "cyrillic", "cjk", "greek"):
+        assert decide({"Times": codes}, {}, script=script)[0].encoding is None
+
+
+def test_une_police_symbolique_aussi_doit_fournir_un_echantillon():
+    """Sept caractères ne suffisent pas à conclure, fût-ce sur du Symbol."""
+
+    maigre = decide({"SymbolMT": Counter({0x8D: 2, 0x8C: 1, 0x88: 1})}, {})[0]
+    fourni = decide({"SymbolMT": Counter({0xA3: 30, 0x6C: 12})}, {})[0]
+
+    assert maigre.encoding is None
+    assert fourni.encoding == "symbol"
