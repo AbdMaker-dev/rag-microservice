@@ -132,3 +132,24 @@ def test_une_police_symbolique_aussi_doit_fournir_un_echantillon():
 
     assert maigre.encoding is None
     assert fourni.encoding == "symbol"
+
+
+def test_le_repli_sans_filtre_ne_peut_qu_ajouter_de_la_prudence():
+    """Un document abîmé ne déclare presque aucune police fiable.
+
+    Se limiter à celles-ci laisse le garde-fou de script inactif là où il
+    servirait le plus. Le repli relit sans filtre — mais une méprise
+    d'encodage transforme des octets en caractères latins, elle ne fabrique
+    jamais du cyrillique. Trouver de tels caractères prouve qu'ils étaient là.
+    """
+
+    from collections import Counter
+
+    from app.core.pdf_encoding import _SCRIPTS
+
+    # Ce que le repli cherche : une écriture non latine bien présente.
+    trouve = Counter({"cyrillic": 400, "latin": 60})
+    part = trouve["cyrillic"] / sum(trouve.values())
+
+    assert part >= 0.3
+    assert "cyrillic" in _SCRIPTS and "arabic" in _SCRIPTS and "cjk" in _SCRIPTS

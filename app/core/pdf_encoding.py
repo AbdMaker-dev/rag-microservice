@@ -253,12 +253,8 @@ _SCRIPTS = {
 }
 
 
-def dominant_script(payload: bytes, trusted: set, pages: int = 5) -> str:
-    """Deviner l'écriture du document à partir de sa portion déjà fiable.
-
-    On ne lit que les polices qui déclarent leur table : celles-là sortent un
-    texte correct, et disent donc la vérité sur la langue du document.
-    """
+def _script_tally(payload: bytes, trusted: set, pages: int) -> Counter:
+    """Compter les caractères par écriture, sur les premières pages."""
 
     import pdfplumber
 
@@ -278,6 +274,33 @@ def dominant_script(payload: bytes, trusted: set, pages: int = 5) -> str:
                             tally[name] += 1
                             break
     except Exception:  # noqa: BLE001
+        return Counter()
+    return tally
+
+
+def dominant_script(payload: bytes, trusted: set, pages: int = 5) -> str:
+    """Deviner l'écriture du document à partir de sa portion déjà fiable.
+
+    On ne lit que les polices qui déclarent leur table : celles-là sortent un
+    texte correct, et disent donc la vérité sur la langue du document.
+    """
+
+    tally = _script_tally(payload, trusted, pages)
+
+    if not tally and trusted:
+        # Un document abîmé ne déclare presque aucune police : se limiter aux
+        # polices fiables laisse le garde-fou inactif là où il servirait le
+        # plus. On relit donc sans filtre — mais pour n'y chercher qu'une
+        # chose : la présence d'une écriture non latine.
+        #
+        # Ce repli ne peut qu'ajouter de la prudence, jamais en retirer. Une
+        # méprise d'encodage transforme des octets en caractères latins ; elle
+        # ne fabrique jamais du cyrillique ni du chinois. Trouver de tels
+        # caractères prouve donc qu'ils étaient là.
+        tally = _script_tally(payload, set(), pages)
+        for name, count in tally.most_common():
+            if name != "latin" and count / max(1, sum(tally.values())) >= 0.3:
+                return name
         return "unknown"
 
     if not tally:
