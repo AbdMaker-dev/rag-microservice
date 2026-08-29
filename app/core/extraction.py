@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from statistics import median
 from time import perf_counter
-from typing import Callable, Dict, List
+from typing import Callable, Dict, List, Optional
 
 from app.core.encoding import RepairPlan, apply_plan, build_plan
 from app.core.pdf_encoding import repair_pdf
@@ -45,6 +45,30 @@ class OcrUnavailable(RuntimeError):
 
 class OcrFailed(RuntimeError):
     """L'OCR a échoué sur ce document."""
+
+
+# Signatures des formats qu'on sait lire. Trois octets suffisent à trancher,
+# et cela referme deux problèmes d'un coup : un dépôt légitime dont le
+# navigateur a mal deviné l'extension, et un fichier arbitraire annoncé comme
+# PDF qui partirait dans un analyseur qui ne l'attend pas.
+_SIGNATURES = (
+    (b"%PDF-", "application/pdf"),
+    (b"PK\x03\x04", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+)
+
+
+def sniff(payload: bytes) -> Optional[str]:
+    """Le type réel du fichier, lu dans ses premiers octets.
+
+    Renvoie None quand la signature n'est pas reconnue : un fichier texte n'en
+    a pas, et l'absence de signature n'est pas une raison de refuser.
+    """
+
+    head = payload[:8].lstrip()
+    for signature, media_type in _SIGNATURES:
+        if head.startswith(signature):
+            return media_type
+    return None
 
 
 def normalise(text: str) -> str:
@@ -161,6 +185,7 @@ class PdfReading:
     fonts: List
     profile: PdfProfile
     ruled_pages: List[int]
+    script: str = "latin"
     timings: Dict[str, float] = field(default_factory=dict)
     tree: TreeHealth = field(default_factory=TreeHealth)
     read_by_tree: bool = False
@@ -221,6 +246,7 @@ def read_pdf_document(payload: bytes, repair: bool = True) -> PdfReading:
 
     timings: Dict[str, float] = {}
     fonts: list = []
+    script = "latin"
 
     if repair:
         # On corrige d'abord le PDF lui-même : chaque police reçoit la table
@@ -228,7 +254,7 @@ def read_pdf_document(payload: bytes, repair: bool = True) -> PdfReading:
         # première lecture, au lieu d'être rattrapé mot à mot ensuite.
         with _step(timings, "encodage"):
             try:
-                payload, fonts = repair_pdf(payload)
+                payload, fonts, script = repair_pdf(payload)
             except Exception:  # noqa: BLE001
                 logger.warning("réécriture du PDF impossible, lecture telle quelle")
 
@@ -284,30 +310,34 @@ def read_pdf_document(payload: bytes, repair: bool = True) -> PdfReading:
                 widths.append(float(page.width))
                 measure_page(number, page, words, coverages, needing_ocr, ruled)
 
-    # Sans arbre et sans filets, c'est la disposition qui fait foi. pdfplumber
-    # voit alors des tableaux là où il n'y a que des barres de fraction : sur
-    # les 99 pages du programme national, aucun filet n'atteint la moitié de la
-    # largeur de page. On lit donc les gouttières de blanc.
-    if not ruled and any(pages_words):
-        with _step(timings, "colonnes"):
-            try:
-                pages = _read_columns(pages_words, widths)
-            except Exception:  # noqa: BLE001
-                logger.warning("lecture par colonnes impossible, filets conservés")
-
-    # Le document porte-t-il un plan exploitable ? Si oui, on le suit : il
-    # donne les cellules d'un tableau sans avoir à les deviner, et désigne son
-    # propre décor comme « Artifact » au lieu de nous le faire compter.
-    tree = TreeHealth()
+    # La voie se décide avant de produire quoi que ce soit : calculer un rendu
+    # par colonnes pour le jeter ensuite parce que l'arbre l'emporte, c'est du
+    # travail payé pour rien.
     by_tree = False
     with _step(timings, "arbre"):
         tree = inspect(payload)
-        if tree.usable:
+
+    if tree.usable:
+        # Le document porte son plan : il donne les cellules d'un tableau sans
+        # qu'on ait à les deviner, et désigne son propre décor comme
+        # « Artifact » au lieu de nous le faire compter.
+        with _step(timings, "arbre"):
             structured = tagged_reader.read(
                 payload, {key: " ".join(parts) for key, parts in marks.items()}
             )
             if any(body.strip() for body in structured):
                 pages, by_tree = structured, True
+
+    if not by_tree and not ruled and any(pages_words):
+        # Sans arbre et sans filets, c'est la disposition qui fait foi.
+        # pdfplumber voit sinon des tableaux là où il n'y a que des barres de
+        # fraction : sur les 99 pages du programme national, aucun filet
+        # n'atteint la moitié de la largeur de page.
+        with _step(timings, "colonnes"):
+            try:
+                pages = _read_columns(pages_words, widths)
+            except Exception:  # noqa: BLE001
+                logger.warning("lecture par colonnes impossible, filets conservés")
 
     described = PdfProfile(
         pages=len(coverages),
@@ -329,7 +359,7 @@ def read_pdf_document(payload: bytes, repair: bool = True) -> PdfReading:
                     pages = [apply_plan(page, plan) for page in pages]
                     logger.info("rattrapage mot à mot", extra={"words": len(plan.words)})
 
-    return PdfReading(pages, plan, fonts, described, ruled, timings, tree, by_tree)
+    return PdfReading(pages, plan, fonts, described, ruled, script, timings, tree, by_tree)
 
 
 def read_pdf_pages(payload: bytes) -> list:

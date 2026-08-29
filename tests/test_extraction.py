@@ -156,3 +156,22 @@ def test_la_reponse_porte_l_analyse_du_document_sans_casser_le_contrat():
     # Les clés historiques restent en place et au même endroit.
     assert rendu["contractVersion"] == "1.0"
     assert rendu["quality"]["score"] == 0.99
+
+
+def test_le_type_reel_du_fichier_prime_sur_le_type_declare():
+    """Un navigateur devine l'extension et se trompe régulièrement.
+
+    Suivre la signature ferme deux problèmes : le dépôt légitime mal étiqueté,
+    et le fichier arbitraire annoncé comme PDF qui entrerait dans un analyseur
+    qui ne l'attend pas.
+    """
+
+    from app.core.extraction import sniff
+
+    assert sniff(b"%PDF-1.4\n%...") == "application/pdf"
+    assert sniff(b"   %PDF-1.7") == "application/pdf"
+    assert sniff(b"PK\x03\x04\x14\x00\x06\x00").endswith("wordprocessingml.document")
+    # Pas de signature reconnue : on ne refuse pas pour autant, un fichier
+    # texte n'en a pas.
+    assert sniff(b"Bonjour, ceci est du texte.") is None
+    assert sniff(b"") is None

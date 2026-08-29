@@ -30,9 +30,9 @@ from app.core.extraction import (
     clean_ocr_text,
     load,
     read_pdf_document,
+    sniff,
     to_sections,
 )
-from app.core.pdf_encoding import dominant_script, fonts_with_tounicode
 from app.core.routing import Route, classify
 from app.core.quality import assess
 from app.models.schemas import (
@@ -79,8 +79,7 @@ def _extract_pdf(payload: bytes, settings: Settings) -> tuple:
     reading = read_pdf_document(payload, repair=settings.encoding_repair_enabled)
     pages, plan, fonts = reading.pages, reading.plan, reading.fonts
 
-    script = dominant_script(payload, fonts_with_tounicode(payload))
-    decision = classify(payload, script, reading.profile, reading.ruled_pages)
+    decision = classify(payload, reading.script, reading.profile, reading.ruled_pages)
     described = decision.document
     logger.info(
         "voie de lecture",
@@ -144,15 +143,31 @@ async def extract(
     analysis = None
     warnings: list = []
 
+    # Le type déclaré par l'appelant n'engage que lui : un navigateur devine
+    # l'extension et se trompe régulièrement. On lit la signature du fichier et
+    # on suit ce qu'elle dit — sans refuser pour autant, car un professeur dont
+    # le dépôt échoue à cause d'une extension mal devinée ne comprendra pas
+    # pourquoi. Cela ferme au passage une porte : un fichier arbitraire annoncé
+    # comme PDF n'entre plus dans un analyseur qui ne l'attend pas.
+    media_type = body.media_type
+    actual = sniff(payload)
+    if actual is not None and actual != media_type:
+        logger.info(
+            "type déclaré démenti par le fichier",
+            extra={"declared": media_type, "actual": actual},
+        )
+        warnings.append("MEDIA_TYPE_MISMATCH")
+        media_type = actual
+
     try:
-        if body.media_type == "application/pdf":
+        if media_type == "application/pdf":
             text, plan, analysis, warnings = _extract_pdf(payload, settings)
         else:
-            text = load(payload, body.media_type)
+            text = load(payload, media_type)
     except UnsupportedMediaType as error:
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail={"code": "UNSUPPORTED_MEDIA_TYPE", "mediaType": body.media_type},
+            detail={"code": "UNSUPPORTED_MEDIA_TYPE", "mediaType": media_type},
         ) from error
     except HTTPException:
         raise
@@ -195,7 +210,8 @@ async def extract(
         "document extrait",
         extra={
             "requestId": body.request_id,
-            "mediaType": body.media_type,
+            "mediaType": media_type,
+            "declaredMediaType": body.media_type,
             "characters": len(text),
             "quality": measured.score,
             "wordPlausibility": measured.word_plausibility,
@@ -216,7 +232,7 @@ async def extract(
     return ExtractResponse(
         request_id=body.request_id,
         filename=body.filename,
-        media_type=body.media_type,
+        media_type=media_type,
         text=text,
         characters=len(text),
         sections=[ExtractedSection(**section) for section in to_sections(text)],

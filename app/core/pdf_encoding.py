@@ -593,25 +593,29 @@ def rewrite(payload: bytes, decisions: List[FontDecision], counts: Dict[str, Cou
     return buffer.getvalue()
 
 
-def repair_pdf(payload: bytes) -> Tuple[bytes, List[FontDecision]]:
-    """Point d'entrée : rendre un PDF lisible avant toute extraction."""
+def repair_pdf(payload: bytes) -> Tuple[bytes, List[FontDecision], str]:
+    """Point d'entrée : rendre un PDF lisible avant toute extraction.
+
+    Renvoie aussi l'écriture dominante : elle est établie ici, et la calculer
+    une seconde fois ailleurs ouvrirait le fichier pour rien.
+    """
 
     # Question la moins chère d'abord : reste-t-il seulement une police à
     # diagnostiquer ? Lire les objets police coûte un dixième de seconde,
     # relever les codes en coûte sept.
     trusted, undeclared = font_maps(payload)
+    script = dominant_script(payload, trusted)
     if not undeclared:
         logger.info("toutes les polices déclarent leur table, rien à corriger")
-        return payload, []
+        return payload, [], script
 
     counts = scan_codes(payload)
     if not counts:
-        return payload, []
-    script = dominant_script(payload, trusted)
+        return payload, [], script
     decisions = decide(counts, declared_encodings(payload), trusted, script)
     if not any(d.changed for d in decisions):
         # Rien à corriger : on rend le document tel quel, sans copie. La
         # plupart des PDF sont correctement encodés et n'ont rien à gagner
         # à passer par une réécriture.
-        return payload, decisions
-    return rewrite(payload, decisions, counts), decisions
+        return payload, decisions, script
+    return rewrite(payload, decisions, counts), decisions, script
