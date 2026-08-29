@@ -92,3 +92,17 @@ def test_les_defauts_sont_rendus_dans_l_ordre_du_texte():
     )
 
     assert [issue.start for issue in issues] == sorted(issue.start for issue in issues)
+
+
+def test_les_majuscules_accentuees_francaises_ne_sont_pas_du_mojibake():
+    """« ALGÈBRE » et « FENÊTRE » sont du français, pas du texte abîmé.
+
+    Trouvé sur une vraie réponse de l'API : le titre de chapitre « ALGÈBRE »
+    était signalé comme reste d'encodage et faisait chuter la confiance de sa
+    section.
+    """
+
+    assert "ENCODING" not in _kinds(
+        "ALGÈBRE. Composition des applications et factorisation des polynômes "
+        "par la méthode de Hörner, avec étude du signe sur un intervalle."
+    )

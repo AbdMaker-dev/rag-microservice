@@ -20,7 +20,12 @@ from dataclasses import dataclass
 from typing import List, Tuple
 
 # Caractères qui signent une méprise d'encodage non résolue.
-_MOJIBAKE = set("ŽÕƒÏ™šÐ¥ˆ‰‹›¡¢¤¦¨ª¬¯¶¸ºÊËÍÈ")
+#
+# « È » et « Ê » en sont exclus : ce sont des majuscules françaises
+# parfaitement légitimes — ALGÈBRE, FENÊTRE — et les y laisser faisait
+# passer un titre de chapitre pour du texte abîmé. « Ë » et « Í » restent,
+# leur emploi en français étant assez rare pour que leur présence intrigue.
+_MOJIBAKE = set("ŽÕƒÏ™šÐ¥ˆ‰‹›¡¢¤¦¨ª¬¯¶¸ºËÍ")
 
 # Symboles mathématiques : leur présence rend la section sensible.
 _MATH = set("≤≥≠≈±×÷√∑∏∫∈∉⊂⊆∩∪∧∨⇔⇒→←↔∞∀∃⊥∥∠°αβγδθλμπσωΩΔΣΠ")
