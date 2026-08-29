@@ -286,23 +286,27 @@ def build_plan(pages_words: List[List[dict]]) -> RepairPlan:
         if _fitness(words, [repair.apply(w) for w in words]) < _ACCEPTANCE_FLOOR:
             unreadable.append(fontname)
 
-    # Un mot ne se répare que si toutes ses occurrences donnent le même
-    # résultat. Sinon on n'y touche pas : mieux vaut un mot abîmé visible
-    # qu'un mot corrigé au hasard dans un sens ou dans l'autre.
+    # Un mot ne se répare que si TOUTES ses occurrences donnent le même
+    # résultat — y compris celles qui ne changent pas. Sans cette précaution,
+    # le « a » de « il a hérité », intact en police de texte, hérite du « α »
+    # que le même caractère vaut une seule fois en Symbol, et tous les « a »
+    # du document deviennent des alphas. On enregistre donc chaque occurrence,
+    # modifiée ou non : une seule occurrence inchangée suffit à faire douter,
+    # et le doute laisse le mot tel quel.
     candidates: Dict[str, set] = {}
     for words in pages_words:
         for word in words:
             original = word["text"]
-            repaired = _rescue(repairs[word["fontname"]].apply(original))
-            if repaired != original:
-                candidates.setdefault(original, set()).add(repaired)
+            candidates.setdefault(original, set()).add(
+                _rescue(repairs[word["fontname"]].apply(original))
+            )
 
     mapping = {
         original: next(iter(variants))
         for original, variants in candidates.items()
-        if len(variants) == 1
+        if len(variants) == 1 and next(iter(variants)) != original
     }
-    ambiguous = len(candidates) - len(mapping)
+    ambiguous = sum(1 for variants in candidates.values() if len(variants) > 1)
     if ambiguous:
         logger.info("mots ambigus laissés intacts", extra={"count": ambiguous})
 

@@ -103,3 +103,24 @@ def test_apply_plan_remplace_les_mots_et_preserve_la_mise_en_page():
     assert "compétences" in rendu
     assert rendu.count("\n") == texte.count("\n")
     assert rendu.startswith("| Contenus |")
+
+
+def test_une_lettre_courante_n_est_pas_grecisee_par_une_occurrence_symbol():
+    """Le « a » de « il a hérité » ne doit pas devenir « α ».
+
+    Le caractère « a » vaut légitimement alpha en police Symbol. S'il suffisait
+    d'une occurrence en Symbol pour décider, toutes les autres — françaises —
+    seraient réécrites. Une occurrence inchangée doit donc peser autant qu'une
+    occurrence corrigée.
+    """
+
+    pages = [[
+        {"text": "a", "fontname": "Symbol"},
+        {"text": "a", "fontname": "Times-Roman"},
+        {"text": "hérité", "fontname": "Times-Roman"},
+    ]]
+
+    plan = build_plan(pages)
+
+    assert "a" not in plan.words
+    assert apply_plan("le Sénégal a hérité", plan) == "le Sénégal a hérité"
