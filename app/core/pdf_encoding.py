@@ -131,6 +131,13 @@ def _raw_codes():
             klass.to_unichr = original
 
 
+# Au-delà, on échantillonne : la distribution des codes d'une police est
+# stable, et parcourir 99 pages pour l'établir coûte sept secondes. Les pages
+# retenues sont réparties sur tout le document, pour ne pas manquer une police
+# qui n'apparaîtrait qu'à la fin.
+_SCAN_PAGES = 30
+
+
 def scan_codes(payload: bytes) -> Dict[str, Counter]:
     """Relever, pour chaque police, les codes d'octets réellement utilisés."""
 
@@ -139,7 +146,9 @@ def scan_codes(payload: bytes) -> Dict[str, Counter]:
     counts: Dict[str, Counter] = defaultdict(Counter)
     with _raw_codes():
         with pdfplumber.open(io.BytesIO(payload)) as document:
-            for page in document.pages:
+            total = len(document.pages)
+            step = max(1, total // _SCAN_PAGES) if total > _SCAN_PAGES else 1
+            for page in document.pages[::step]:
                 for char in page.chars:
                     text = char.get("text") or ""
                     if not text:
@@ -148,6 +157,36 @@ def scan_codes(payload: bytes) -> Dict[str, Counter]:
                     if _SENTINEL <= code < _SENTINEL + _SENTINEL_SPAN:
                         counts[char["fontname"]][code - _SENTINEL] += 1
     return dict(counts)
+
+
+def font_maps(payload: bytes) -> Tuple[set, set]:
+    """Les polices qui déclarent leur table, et celles qui ne la déclarent pas."""
+
+    from pypdf import PdfReader
+
+    with_map: set = set()
+    without_map: set = set()
+    try:
+        reader = PdfReader(io.BytesIO(payload))
+        seen: set = set()
+        for page in reader.pages:
+            resources = page.get("/Resources")
+            if resources is None:
+                continue
+            fonts = resources.get_object().get("/Font")
+            if fonts is None:
+                continue
+            for reference in fonts.get_object().values():
+                font = reference.get_object()
+                if id(font) in seen:
+                    continue
+                seen.add(id(font))
+                name = str(font.get("/BaseFont", "")).lstrip("/")
+                (with_map if "/ToUnicode" in font else without_map).add(name)
+    except Exception:  # noqa: BLE001
+        logger.warning("lecture des polices impossible, aucune correction tentée")
+        return set(), set()
+    return with_map - without_map, without_map
 
 
 def fonts_with_tounicode(payload: bytes) -> set:
@@ -206,7 +245,7 @@ _SCRIPTS = {
 }
 
 
-def dominant_script(payload: bytes, trusted: set, pages: int = 20) -> str:
+def dominant_script(payload: bytes, trusted: set, pages: int = 5) -> str:
     """Deviner l'écriture du document à partir de sa portion déjà fiable.
 
     On ne lit que les polices qui déclarent leur table : celles-là sortent un
@@ -335,14 +374,15 @@ def decide(
 def unicode_map(decision: FontDecision, codes: Iterable[int]) -> Dict[int, str]:
     """La correspondance code → caractère à inscrire dans le PDF."""
 
+    # La décision peut se prendre sur un échantillon de pages, mais la table
+    # inscrite dans le PDF doit couvrir tout le répertoire : un code vu
+    # seulement sur une page non échantillonnée ressortirait sinon en clair.
     if decision.is_symbolic:
-        return {code: SYMBOL_ENCODING[code] for code in codes if code in SYMBOL_ENCODING}
+        return dict(SYMBOL_ENCODING)
     if not decision.encoding:
         return {}
     mapping: Dict[int, str] = {}
-    for code in codes:
-        if not 0 <= code <= 0xFF:
-            continue
+    for code in range(0x20, 0x100):
         try:
             mapping[code] = bytes([code]).decode(decision.encoding)
         except UnicodeDecodeError:
@@ -548,10 +588,17 @@ def rewrite(payload: bytes, decisions: List[FontDecision], counts: Dict[str, Cou
 def repair_pdf(payload: bytes) -> Tuple[bytes, List[FontDecision]]:
     """Point d'entrée : rendre un PDF lisible avant toute extraction."""
 
+    # Question la moins chère d'abord : reste-t-il seulement une police à
+    # diagnostiquer ? Lire les objets police coûte un dixième de seconde,
+    # relever les codes en coûte sept.
+    trusted, undeclared = font_maps(payload)
+    if not undeclared:
+        logger.info("toutes les polices déclarent leur table, rien à corriger")
+        return payload, []
+
     counts = scan_codes(payload)
     if not counts:
         return payload, []
-    trusted = fonts_with_tounicode(payload)
     script = dominant_script(payload, trusted)
     decisions = decide(counts, declared_encodings(payload), trusted, script)
     if not any(d.changed for d in decisions):

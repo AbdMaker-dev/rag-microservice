@@ -14,7 +14,7 @@ import io
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List
+from typing import List, Optional
 
 from app.core.pdf_profile import PdfProfile, profile
 from app.core.struct_tree import TreeHealth, inspect
@@ -104,7 +104,12 @@ def page_shape(number: int, ruled: List[int]) -> PageShape:
     return PageShape.RULED if number in ruled else PageShape.UNRULED
 
 
-def classify(payload: bytes, script: str = "latin") -> Classification:
+def classify(
+    payload: bytes,
+    script: str = "latin",
+    described: Optional[PdfProfile] = None,
+    ruled: Optional[List[int]] = None,
+) -> Classification:
     """Déterminer la voie de lecture d'un PDF.
 
     L'ordre des questions est celui de leur gravité : un document sans couche
@@ -112,7 +117,7 @@ def classify(payload: bytes, script: str = "latin") -> Classification:
     un balisage rend les heuristiques inutiles.
     """
 
-    described = profile(payload)
+    described = described if described is not None else profile(payload)
 
     if described.pages and len(described.pages_needing_ocr) == described.pages:
         return Classification(
@@ -139,7 +144,7 @@ def classify(payload: bytes, script: str = "latin") -> Classification:
             ),
         )
 
-    ruled = ruled_pages(payload)
+    ruled = ruled if ruled is not None else ruled_pages(payload)
     if tree.present:
         motif = (
             f"arbre présent mais inexploitable ({tree.coverage:.0%} de couverture, "

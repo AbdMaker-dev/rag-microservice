@@ -13,10 +13,15 @@ import re
 import shutil
 import subprocess
 import tempfile
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from statistics import median
+from time import perf_counter
 from typing import Callable, Dict, List
 
 from app.core.encoding import RepairPlan, apply_plan, build_plan
 from app.core.pdf_encoding import repair_pdf
+from app.core.pdf_profile import PdfProfile, is_tagged, measure_page
 from app.core.quality import assess
 
 _CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -138,13 +143,47 @@ def _read_pdf_text(payload: bytes) -> tuple:
     return normalise(rendered), page_count
 
 
-def read_pdf_document(payload: bytes, repair: bool = True) -> tuple:
-    """Lire un PDF et corriger son encodage. Renvoie (pages, plan, polices).
+@dataclass(frozen=True)
+class PdfReading:
+    """Tout ce qu'une seule lecture du document a permis d'établir.
 
-    Deux passes sur une seule ouverture du fichier. La première relève le
-    texte de chaque page et la police de chaque mot ; la seconde applique la
-    correction, qui ne peut être décidée qu'une fois tout le document vu —
-    une police se juge sur l'ensemble de ses mots, pas sur une page.
+    Chaque brique — profil, filets, polices, texte — ouvrait auparavant le
+    fichier de son côté : quatre ouvertures pour un document, vingt et une
+    secondes avant d'avoir lu une ligne sur un PDF de 99 pages. Elles
+    partagent désormais la même passe.
+    """
+
+    pages: List[str]
+    plan: RepairPlan
+    fonts: List
+    profile: PdfProfile
+    ruled_pages: List[int]
+    timings: Dict[str, float] = field(default_factory=dict)
+
+
+@contextmanager
+def _step(timings: Dict[str, float], name: str):
+    """Chronométrer une étape.
+
+    La fusion des passes fait perdre la visibilité qu'on avait quand chaque
+    brique était séparée. Sans ce relevé, la prochaine régression de
+    performance serait invisible.
+    """
+
+    start = perf_counter()
+    try:
+        yield
+    finally:
+        timings[name] = round(timings.get(name, 0.0) + perf_counter() - start, 3)
+
+
+def read_pdf_document(payload: bytes, repair: bool = True) -> PdfReading:
+    """Lire un PDF de bout en bout, en une passe et en se chronométrant.
+
+    L'ordre est contraint : la correction d'encodage doit précéder la lecture,
+    puisqu'elle change ce que le lecteur verra. Tout le reste — surface de
+    texte, surface d'image, filets, mots, tableaux — se relève ensuite d'un
+    seul parcours.
     """
 
     try:
@@ -152,48 +191,67 @@ def read_pdf_document(payload: bytes, repair: bool = True) -> tuple:
     except ImportError as error:  # pragma: no cover
         raise UnsupportedMediaType("pdfplumber n'est pas installé") from error
 
+    timings: Dict[str, float] = {}
     fonts: list = []
+
     if repair:
         # On corrige d'abord le PDF lui-même : chaque police reçoit la table
         # qui décode réellement son texte. Le document sort alors juste dès la
         # première lecture, au lieu d'être rattrapé mot à mot ensuite.
-        try:
-            payload, fonts = repair_pdf(payload)
-        except Exception:  # noqa: BLE001
-            logger.warning("réécriture du PDF impossible, lecture telle quelle")
-
-    pages: list = []
-    pages_words: list = []
-
-    with pdfplumber.open(io.BytesIO(payload)) as document:
-        for page in document.pages:
-            parts = []
-            tables = page.find_tables()
-            for table in tables:
-                rendered = _table_to_markdown(table.extract())
-                if rendered:
-                    parts.append(rendered)
-            outside = page
-            for table in tables:
-                # Un tableau peut déborder la page d'une fraction de point,
-                # par arrondi. pdfplumber refuse alors la découpe et fait
-                # échouer tout le document : on ramène la boîte dans la page.
-                try:
-                    outside = outside.outside_bbox(_clamp(table.bbox, page.bbox))
-                except ValueError:
-                    logger.warning("tableau hors page, découpe ignorée")
-            remaining = outside.extract_text(layout=False) or ""
-            if remaining.strip():
-                parts.append(remaining.strip())
-            pages.append("\n\n".join(parts))
-
+        with _step(timings, "encodage"):
             try:
-                pages_words.append(page.extract_words(extra_attrs=["fontname"]))
+                payload, fonts = repair_pdf(payload)
             except Exception:  # noqa: BLE001
-                # Un PDF peut refuser de livrer ses polices. On garde alors le
-                # texte tel quel : sans police, aucune correction n'est sûre.
-                logger.warning("polices illisibles sur une page, correction ignorée")
-                pages_words.append([])
+                logger.warning("réécriture du PDF impossible, lecture telle quelle")
+
+    pages: List[str] = []
+    pages_words: List[list] = []
+    coverages: List[float] = []
+    needing_ocr: List[int] = []
+    ruled: List[int] = []
+
+    with _step(timings, "lecture"):
+        with pdfplumber.open(io.BytesIO(payload)) as document:
+            for number, page in enumerate(document.pages, start=1):
+                parts = []
+                tables = page.find_tables()
+                for table in tables:
+                    rendered = _table_to_markdown(table.extract())
+                    if rendered:
+                        parts.append(rendered)
+
+                outside = page
+                for table in tables:
+                    # Un tableau peut déborder la page d'une fraction de point,
+                    # par arrondi. pdfplumber refuse alors la découpe et fait
+                    # échouer tout le document : on ramène la boîte dans la page.
+                    try:
+                        outside = outside.outside_bbox(_clamp(table.bbox, page.bbox))
+                    except ValueError:
+                        logger.warning("tableau hors page, découpe ignorée")
+                remaining = outside.extract_text(layout=False) or ""
+                if remaining.strip():
+                    parts.append(remaining.strip())
+                pages.append("\n\n".join(parts))
+
+                try:
+                    words = page.extract_words(extra_attrs=["fontname"])
+                except Exception:  # noqa: BLE001
+                    # Un PDF peut refuser de livrer ses polices. On garde alors
+                    # le texte tel quel : sans police, aucune correction n'est
+                    # sûre.
+                    logger.warning("polices illisibles sur une page")
+                    words = []
+                pages_words.append(words)
+
+                measure_page(number, page, words, coverages, needing_ocr, ruled)
+
+    described = PdfProfile(
+        pages=len(coverages),
+        tagged=is_tagged(payload),
+        text_coverage=round(median(coverages), 4) if coverages else 0.0,
+        pages_needing_ocr=needing_ocr,
+    )
 
     # Rattrapage mot à mot : filet de secours, jamais routine. Il ignore les
     # polices, donc il confond un « ² » légitime avec un symbole Symbol et
@@ -201,19 +259,20 @@ def read_pdf_document(payload: bytes, repair: bool = True) -> tuple:
     # correction des polices n'a rien pu faire et que le texte reste mauvais.
     plan = RepairPlan({}, {}, [])
     if repair and not any(font.changed for font in fonts):
-        if assess(assemble(pages)).score < _RESCUE_FLOOR:
-            plan = build_plan(pages_words)
-            if not plan.is_empty:
-                pages = [apply_plan(page, plan) for page in pages]
-                logger.info("rattrapage mot à mot", extra={"words": len(plan.words)})
-    return pages, plan, fonts
+        with _step(timings, "rattrapage"):
+            if assess(assemble(pages)).score < _RESCUE_FLOOR:
+                plan = build_plan(pages_words)
+                if not plan.is_empty:
+                    pages = [apply_plan(page, plan) for page in pages]
+                    logger.info("rattrapage mot à mot", extra={"words": len(plan.words)})
+
+    return PdfReading(pages, plan, fonts, described, ruled, timings)
 
 
 def read_pdf_pages(payload: bytes) -> list:
     """Texte de chaque page, dans l'ordre. Une page vide reste une chaîne vide."""
 
-    pages, _, _ = read_pdf_document(payload)
-    return pages
+    return read_pdf_document(payload).pages
 
 
 def assemble(pages: list) -> str:
@@ -244,8 +303,7 @@ def load_pdf(payload: bytes, **_ignored) -> str:
     tests, exploration.
     """
 
-    pages, _, _ = read_pdf_document(payload)
-    return clean_ocr_text(assemble(pages))
+    return clean_ocr_text(assemble(read_pdf_document(payload).pages))
 
 
 def load_docx(payload: bytes) -> str:

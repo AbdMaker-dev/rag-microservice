@@ -76,8 +76,11 @@ def _extract_pdf(payload: bytes, settings: Settings) -> tuple:
     Renvoie (texte, plan, analyse, avertissements).
     """
 
+    reading = read_pdf_document(payload, repair=settings.encoding_repair_enabled)
+    pages, plan, fonts = reading.pages, reading.plan, reading.fonts
+
     script = dominant_script(payload, fonts_with_tounicode(payload))
-    decision = classify(payload, script)
+    decision = classify(payload, script, reading.profile, reading.ruled_pages)
     described = decision.document
     logger.info(
         "voie de lecture",
@@ -93,9 +96,6 @@ def _extract_pdf(payload: bytes, settings: Settings) -> tuple:
     if decision.route is Route.TAGGED:
         pass  # à venir : lecture de /StructTreeRoot
 
-    pages, plan, fonts = read_pdf_document(
-        payload, repair=settings.encoding_repair_enabled
-    )
     warnings: list = []
 
     # Une page sans couche texte ne se rattrape pas à la lecture. On le dit,
@@ -130,6 +130,7 @@ def _extract_pdf(payload: bytes, settings: Settings) -> tuple:
             if font.changed
         ],
     )
+    logger.info("étapes de lecture", extra={"timings": reading.timings})
     return clean_ocr_text(assemble(pages)), plan, analysis, warnings
 
 
@@ -185,7 +186,11 @@ async def extract(
         warnings.append("LOW_TEXT_QUALITY")
 
     # Le contenu extrait n'est jamais journalisé : c'est du matériel
-    # pédagogique, parfois sous droits.
+    # pédagogique, parfois sous droits. Ce qui l'est, c'est ce qu'on a décidé
+    # à son sujet — la voie retenue, les tables d'encodage, le coût de chaque
+    # étape. Les documents qui manquent au corpus arriveront d'eux-mêmes en
+    # production : ce journal est ce qui les transformera en corpus, sans
+    # jamais conserver leur contenu.
     logger.info(
         "document extrait",
         extra={
@@ -193,7 +198,18 @@ async def extract(
             "mediaType": body.media_type,
             "characters": len(text),
             "quality": measured.score,
+            "wordPlausibility": measured.word_plausibility,
+            "cidMarkers": measured.cid_markers,
             "wordsRepaired": len(plan.words),
+            "route": analysis.route if analysis else None,
+            "tagged": analysis.tagged if analysis else None,
+            "textCoverage": analysis.text_coverage if analysis else None,
+            "pagesNeedingOcr": len(analysis.pages_needing_ocr) if analysis else 0,
+            "fontsRepaired": [
+                {"table": font.table, "samples": font.samples}
+                for font in (analysis.fonts if analysis else [])
+            ],
+            "warnings": warnings,
         },
     )
 
