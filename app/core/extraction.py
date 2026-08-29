@@ -504,14 +504,21 @@ _LIST_ITEM = re.compile(r"^\s*([-•*—]|\d+[.)])\s+")
 _ENDS_SENTENCE = re.compile(r"[.!?…:;»\"]\s*$")
 
 
-def _repeated_lines(pages: list, threshold: float = 0.2) -> set:
+def _repeated_lines(pages: list, threshold: float = 0.04) -> set:
     """Repérer les en-têtes et pieds de page.
 
-    Une ligne qui revient à l'identique sur beaucoup de pages est un
-    habillage, pas du contenu. Le seuil est bas volontairement : un fichier
-    peut contenir plusieurs progressions à la suite, chacune avec son propre
-    pied de page, et aucune n'atteindrait alors la majorité des pages.
-    On ne cherche qu'à partir de 3 pages, sinon une répétition est fortuite.
+    Une ligne qui revient sur beaucoup de pages est un habillage, pas du
+    contenu. Le seuil est très bas — 4 % — parce qu'un pied de page change
+    avec la partie du document : le programme national en porte onze
+    variantes (« Seconde S », « Premières S1 et S3 », « Terminales »,
+    « Séries L », plus les versions paire et impaire où le numéro passe de la
+    fin au début), chacune sur 8 à 12 pages seulement. À 20 %, aucune
+    n'atteignait le seuil et les 76 pieds de page restaient dans le corps.
+
+    Ce seuil bas ne peut pas emporter du contenu, car on ne regarde que les
+    deux premières et trois dernières lignes de chaque page : un habillage s'y
+    trouve toujours, un paragraphe rarement. Les lignes de tableau sont
+    exclues d'office.
     """
 
     if len(pages) < 3:
@@ -520,7 +527,11 @@ def _repeated_lines(pages: list, threshold: float = 0.2) -> set:
     counts: Dict[str, int] = {}
     for page in pages:
         lines = [line.strip() for line in page.split("\n") if line.strip()]
-        for line in set(lines):
+        # Un pied de page n'est pas toujours en bas de la feuille — dans le
+        # programme national il est à 75 % de la hauteur — mais il est
+        # toujours en tête ou en queue du texte de sa page.
+        edges = set(lines[:2] + lines[-3:])
+        for line in edges:
             # Les lignes de tableau sont du contenu, jamais de l'habillage :
             # les exclure évite de supprimer une ligne de programme répétée.
             if line.startswith("|"):
@@ -532,14 +543,19 @@ def _repeated_lines(pages: list, threshold: float = 0.2) -> set:
     return {line for line, count in counts.items() if count >= minimum}
 
 
-def _normalise_digits(line: str) -> str:
-    """« page 12 » et « page 13 » sont le même habillage.
+_DIGIT_RUN = re.compile(r"\d+")
 
-    Sans cette normalisation, un pied de page numéroté n'est jamais reconnu
-    comme répété : chaque page en porte une variante unique.
+
+def _normalise_digits(line: str) -> str:
+    """« page 9 » et « page 12 » sont le même habillage.
+
+    On réduit chaque **suite** de chiffres à un seul marqueur, pas chaque
+    chiffre : remplacer caractère par caractère laisse « 2006 1 » et
+    « 2006 12 » différents, et le pied de page n'est alors jamais reconnu
+    comme répété — chaque page en porte une variante unique.
     """
 
-    return "".join("#" if character.isdigit() else character for character in line)
+    return _DIGIT_RUN.sub("#", line)
 
 
 def _join_broken_lines(text: str) -> str:

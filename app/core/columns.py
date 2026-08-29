@@ -18,11 +18,16 @@ largeur d'espace suit le document qu'on lui donne.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from statistics import median
 from typing import Dict, List, Optional, Sequence, Tuple
 
 logger = logging.getLogger(__name__)
+
+# Une suite de chiffres, réduite à un marqueur : « page 9 » et « page 12 » sont
+# le même habillage.
+_DIGIT_RUN = re.compile(r"\d+")
 
 # --- Rapports, et ce qu'ils valent sur le programme national ----------------
 # Mesuré sur ce document : hauteur de ligne 10,8 pt, largeur d'espace 2,7 pt,
@@ -242,7 +247,7 @@ def furniture(pages_lines: Sequence[Sequence[Sequence[dict]]]) -> set:
             text = " ".join(word["text"] for word in line).strip()
             # Les chiffres varient d'une page à l'autre : « page 12 » et
             # « page 13 » sont le même habillage.
-            normalised = "".join("#" if character.isdigit() else character for character in text)
+            normalised = _DIGIT_RUN.sub("#", text)
             # Sans chiffre, ce n'est pas un titre courant : c'est du contenu
             # qui se répète, typiquement l'en-tête d'un tableau reconduit de
             # page en page.
@@ -257,7 +262,7 @@ def furniture(pages_lines: Sequence[Sequence[Sequence[dict]]]) -> set:
 
 def _is_furniture(line: Sequence[dict], known: set) -> bool:
     text = " ".join(word["text"] for word in line).strip()
-    return "".join("#" if c.isdigit() else c for c in text) in known
+    return _DIGIT_RUN.sub("#", text) in known
 
 
 def render(lines: Sequence[Sequence[dict]], boundaries: Sequence[float],

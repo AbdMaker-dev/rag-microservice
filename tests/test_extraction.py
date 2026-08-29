@@ -175,3 +175,31 @@ def test_le_type_reel_du_fichier_prime_sur_le_type_declare():
     # texte n'en a pas.
     assert sniff(b"Bonjour, ceci est du texte.") is None
     assert sniff(b"") is None
+
+
+def test_un_pied_de_page_qui_varie_avec_la_partie_du_document_est_retire():
+    """Le programme national porte onze variantes de pied de page.
+
+    « Seconde S », « Premières S1 et S3 », « Terminales », « Séries L », plus
+    les versions paire et impaire où le numéro passe de la fin au début —
+    chacune sur 8 à 12 pages seulement. À 20 %, aucune n'atteignait le seuil
+    et 76 pieds de page restaient dans le corps du texte.
+    """
+
+    from app.core.extraction import _repeated_lines
+
+    pages = []
+    for numero in range(1, 25):
+        partie = "Seconde S" if numero <= 12 else "Terminales S1 et S3"
+        pages.append(
+            f"Contenu propre à la page {numero}.\n"
+            f"Programmes de mathématiques - {partie} - Année 2006 {numero}"
+        )
+
+    bruit = _repeated_lines(pages)
+
+    assert any("Seconde S" in ligne for ligne in bruit)
+    assert any("Terminales" in ligne for ligne in bruit)
+    # Le contenu propre à chaque page ne doit jamais être confondu avec de
+    # l'habillage, même avec un seuil aussi bas.
+    assert not any("Contenu propre" in ligne for ligne in bruit)
