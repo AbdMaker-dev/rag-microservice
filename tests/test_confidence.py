@@ -106,3 +106,43 @@ def test_les_majuscules_accentuees_francaises_ne_sont_pas_du_mojibake():
         "ALGÈBRE. Composition des applications et factorisation des polynômes "
         "par la méthode de Hörner, avec étude du signe sur un intervalle."
     )
+
+
+def test_une_capitale_accentuee_au_milieu_d_un_mot_trahit_un_accent_perdu():
+    """« RÈpublique du SÈnÈgal » : trouvé sur un vrai document de professeur.
+
+    Ni le score global — 0,9927 — ni la plausibilité — 0,998 — ne le voyaient,
+    parce que le défaut ne touchait que cinq caractères sur onze mille.
+    """
+
+    texte = "RÈpublique du SÈnÈgal, Un Peuple Un But Une Foi, ministère."
+
+    _, issues = inspect_section(texte)
+    encodage = [issue for issue in issues if issue.kind == "ENCODING"]
+
+    assert len(encodage) == 3
+    assert all(texte[issue.start] == "È" for issue in encodage)
+
+
+def test_un_titre_tout_en_capitales_reste_silencieux():
+    """La lettre suivante est une capitale : ce n'est pas un accent perdu.
+
+    C'est ce qui distingue « ALGÈBRE » de « RÈpublique », là où une simple
+    liste de caractères interdits confondait les deux.
+    """
+
+    for titre in ("ALGÈBRE. Composition des applications et factorisation ici.",
+                  "La FENÊTRE de Viète et le THÉORÈME de Thalès au programme.",
+                  "Éléments de symétrie et Étude des branches infinies à voir."):
+        assert "ENCODING" not in _kinds(titre)
+
+
+def test_une_position_n_est_signalee_qu_une_fois():
+    """« Ë » répond aux deux règles : caractère suspect et capitale intruse."""
+
+    _, issues = inspect_section(
+        "Les élËves doivent savoir résoudre une équation du second degré."
+    )
+    positions = [issue.start for issue in issues if issue.kind == "ENCODING"]
+
+    assert len(positions) == len(set(positions))

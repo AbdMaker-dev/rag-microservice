@@ -82,12 +82,33 @@ def _plausible(token: str) -> bool:
     )
 
 
+# Une capitale accentuée au milieu d'un mot, suivie d'une minuscule :
+# « RÈpublique », « SÈnÈgal ». C'est la signature d'un accent perdu, et elle se
+# passe d'énumérer les caractères suspects.
+#
+# Un mot tout en capitales n'y répond pas — « ALGÈBRE », « THÉORÈME » — parce
+# que la lettre suivante est elle aussi une capitale. C'est ce qui permet de
+# distinguer un titre de chapitre d'un texte abîmé, là où une simple liste de
+# caractères interdits confondait les deux.
+_BROKEN_CASE = re.compile(r"(?<=[^\W\d_])([ÀÁÂÃÄÅÇÈÉÊËÌÍÎÏÑÒÓÔÕÖÙÚÛÜÝ])(?=[a-zà-öø-ÿ])")
+
+
 def _encoding_issues(text: str) -> List[Issue]:
-    return [
+    found = [
         Issue("ENCODING", index, index + 1, text[max(0, index - 20): index + 20])
         for index, character in enumerate(text)
         if character in _MOJIBAKE
     ]
+    # Une même position peut répondre aux deux règles — « Ë » est à la fois un
+    # caractère de signature et une capitale intruse. On ne la signale qu'une.
+    seen = {issue.start for issue in found}
+    found.extend(
+        Issue("ENCODING", match.start(1), match.end(1),
+              text[max(0, match.start() - 20): match.end() + 20])
+        for match in _BROKEN_CASE.finditer(text)
+        if match.start(1) not in seen
+    )
+    return found
 
 
 def _ocr_issues(text: str) -> List[Issue]:
