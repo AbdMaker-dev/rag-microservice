@@ -205,7 +205,11 @@ def _read_columns(pages_words: List[list], widths: List[float]) -> List[str]:
     return [
         columns.render(
             page_lines,
-            [(left + right) / 2 for left, right in found] if found else fallback,
+            # Le gabarit ne secourt qu'une page qui a vu des colonnes sans les
+            # voir toutes. Une page qui n'en voit aucune est de la prose.
+            [(left + right) / 2 for left, right in found]
+            if len(found) >= len(fallback) or not found
+            else fallback,
             width,
             metrics,
             known,

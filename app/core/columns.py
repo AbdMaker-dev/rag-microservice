@@ -189,9 +189,11 @@ def template(page_gutters: Sequence[Sequence[Tuple[float, float]]], pages: int,
     largeurs — 209 et 351 sur une page, 258 et 383 sur la suivante. Chercher
     des positions communes n'y donne rien.
 
-    Le gabarit ne sert donc qu'à secourir une page qui n'a rien trouvé : il
-    retient le nombre de colonnes le plus fréquent, et pour chaque rang la
-    position médiane observée.
+    Le gabarit ne sert qu'à secourir une page qui a trouvé **moins** de
+    colonnes que le document n'en a d'ordinaire — une page encombrée de
+    formules, par exemple. Une page qui n'en trouve aucune n'est pas une page
+    de tableau mal lue : c'est de la prose, et lui imposer des colonnes
+    déchiquette ses phrases.
     """
 
     par_rang: Dict[int, List[float]] = {}
@@ -264,6 +266,11 @@ def render(lines: Sequence[Sequence[dict]], boundaries: Sequence[float],
 
     if not lines:
         return ""
+    # « Pleine largeur » se mesure au bloc de texte, pas à la feuille : un
+    # paragraphe justifié s'arrête aux marges et n'atteint jamais le bord.
+    # Mesuré à la page, la préface du programme national passait pour un
+    # tableau et ses phrases se retrouvaient entrelacées sur trois colonnes.
+    block = max((_span(line) for line in lines), default=width) or width
     if not boundaries:
         return "\n".join(" ".join(word["text"] for word in line) for line in lines)
 
@@ -289,7 +296,7 @@ def render(lines: Sequence[Sequence[dict]], boundaries: Sequence[float],
             continue
         # Une ligne qui traverse toute la page est de la prose, pas une ligne
         # de tableau : la découper aux frontières la hacherait.
-        if _span(line) >= width * 0.85:
+        if _span(line) >= block * 0.85:
             flush()
             out.append(" ".join(word["text"] for word in line))
             previous_bottom = max(word["bottom"] for word in line)

@@ -84,9 +84,29 @@ def test_un_mot_au_bord_reste_dans_sa_colonne():
     """L'affectation se fait par recouvrement, jamais par le centre du mot."""
 
     m = Metrics(line_height=10.0, space_width=2.5, line_gap=12.0)
-    # Le mot déborde la frontière, mais l'essentiel est à gauche.
-    lignes = [[_word("gauche", 150, 100, width=60), _word("droite", 260, 100)]]
+    lignes = [
+        # Une ligne large, qui donne sa mesure au bloc de texte.
+        [_word("titre", 0, 80, width=380)],
+        # Le mot déborde la frontière, mais l'essentiel est à gauche.
+        [_word("gauche", 150, 100, width=60), _word("droite", 260, 100)],
+    ]
 
     rendu = render(lignes, [205.0], 400.0, m)
 
-    assert rendu.startswith("| gauche | droite |")
+    assert "| gauche | droite |" in rendu
+
+
+def test_une_page_sans_colonne_reste_de_la_prose():
+    """La préface du programme national était déchiquetée sur trois colonnes.
+
+    « Pleine largeur » se mesurait à la feuille, alors qu'un paragraphe
+    justifié s'arrête aux marges et n'atteint jamais le bord.
+    """
+
+    m = Metrics(line_height=10.0, space_width=2.5, line_gap=12.0)
+    # Un paragraphe justifié : les lignes vont de 60 à 480 sur une page de 600.
+    lignes = [[_word(f"ligne{n}", 60, 100 + n * 12, width=420)] for n in range(4)]
+
+    rendu = render(lignes, [225.0, 360.0], 600.0, m)
+
+    assert "|" not in rendu
