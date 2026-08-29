@@ -13,7 +13,9 @@ import re
 import shutil
 import subprocess
 import tempfile
-from typing import Callable, Dict
+from typing import Callable, Dict, List
+
+from app.core.encoding import RepairPlan, apply_plan, build_plan
 
 _CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _EXCESS_BLANK_LINES = re.compile(r"\n{3,}")
@@ -112,15 +114,23 @@ def _read_pdf_text(payload: bytes) -> tuple:
     return normalise(rendered), page_count
 
 
-def read_pdf_pages(payload: bytes) -> list:
-    """Texte de chaque page, dans l'ordre. Une page vide reste une chaîne vide."""
+def read_pdf_document(payload: bytes, repair: bool = True) -> tuple:
+    """Lire un PDF et corriger son encodage. Renvoie (pages, plan).
+
+    Deux passes sur une seule ouverture du fichier. La première relève le
+    texte de chaque page et la police de chaque mot ; la seconde applique la
+    correction, qui ne peut être décidée qu'une fois tout le document vu —
+    une police se juge sur l'ensemble de ses mots, pas sur une page.
+    """
 
     try:
         import pdfplumber
     except ImportError as error:  # pragma: no cover
         raise UnsupportedMediaType("pdfplumber n'est pas installé") from error
 
-    pages = []
+    pages: list = []
+    pages_words: list = []
+
     with pdfplumber.open(io.BytesIO(payload)) as document:
         for page in document.pages:
             parts = []
@@ -136,6 +146,29 @@ def read_pdf_pages(payload: bytes) -> list:
             if remaining.strip():
                 parts.append(remaining.strip())
             pages.append("\n\n".join(parts))
+
+            try:
+                pages_words.append(page.extract_words(extra_attrs=["fontname"]))
+            except Exception:  # noqa: BLE001
+                # Un PDF peut refuser de livrer ses polices. On garde alors le
+                # texte tel quel : sans police, aucune correction n'est sûre.
+                logger.warning("polices illisibles sur une page, correction ignorée")
+                pages_words.append([])
+
+    plan = build_plan(pages_words) if repair else RepairPlan({}, {}, [])
+    if not plan.is_empty:
+        pages = [apply_plan(page, plan) for page in pages]
+        logger.info(
+            "encodage corrigé",
+            extra={"words": len(plan.words), "unreadableFonts": len(plan.unreadable_fonts)},
+        )
+    return pages, plan
+
+
+def read_pdf_pages(payload: bytes) -> list:
+    """Texte de chaque page, dans l'ordre. Une page vide reste une chaîne vide."""
+
+    pages, _ = read_pdf_document(payload)
     return pages
 
 
@@ -167,8 +200,8 @@ def load_pdf(payload: bytes, **_ignored) -> str:
     tests, exploration.
     """
 
-    text, _ = _read_pdf_text(payload)
-    return clean_ocr_text(text)
+    pages, _ = read_pdf_document(payload)
+    return clean_ocr_text(assemble(pages))
 
 
 def load_docx(payload: bytes) -> str:

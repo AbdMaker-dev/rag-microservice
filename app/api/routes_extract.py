@@ -1,8 +1,13 @@
 """POST /extract — document -> texte structuré.
 
 `pdfplumber` lit la couche texte et les tableaux avec leurs coordonnées.
-Quand une page ressort illisible — polices mal déclarées, accents remplacés
-par des caractères parasites — le modèle de langue la réécrit.
+Quand un PDF déclare mal ses polices — accents remplacés par des caractères
+parasites — l'encodage est rétabli de façon déterministe, police par police.
+
+Aucun modèle de langue n'intervient ici. Un modèle réécrirait les passages
+qu'il ne comprend pas, et sur un programme scolaire une formule inventée mais
+crédible est plus dangereuse qu'un caractère manquant : le professeur repère
+le second, jamais la première.
 
 Sans état : rien n'est stocké. Le texte est rendu à l'appelant avec une note
 de qualité, et c'est le prof qui relit avant d'indexer.
@@ -14,20 +19,20 @@ import base64
 import binascii
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.api.dependencies import require_service_token
 from app.config import Settings, get_settings
+from app.core.encoding import RepairPlan
 from app.core.extraction import (
     UnsupportedMediaType,
     assemble,
     clean_ocr_text,
     load,
-    read_pdf_pages,
+    read_pdf_document,
     to_sections,
 )
-from app.core.quality import assess, corrupted_pages
-from app.core.repair import RepairUnavailable
+from app.core.quality import assess
 from app.models.schemas import (
     ExtractedSection,
     ExtractionQuality,
@@ -61,69 +66,35 @@ def _decode(request: ExtractRequest, settings: Settings) -> bytes:
     return payload
 
 
-async def _extract_pdf(
-    payload: bytes, request: Request, settings: Settings
-) -> tuple:
-    """Lire un PDF, page par page, en réparant celles qui sont illisibles."""
+def _extract_pdf(payload: bytes, settings: Settings) -> tuple:
+    """Lire un PDF et rétablir son encodage. Renvoie (texte, plan, avertissements)."""
 
-    pages = read_pdf_pages(payload)
+    pages, plan = read_pdf_document(payload, repair=settings.encoding_repair_enabled)
     warnings: list = []
 
-    if not settings.repair_enabled:
-        return clean_ocr_text(assemble(pages)), [], warnings
-
-    # Une page vide n'a pas de couche texte du tout : rien à réparer, seule
-    # une relecture de l'image la sauverait, et on y a renoncé.
-    damaged = [
-        number
-        for number in corrupted_pages(
-            pages, plausibility_floor=settings.repair_quality_threshold
-        )
-        if pages[number - 1].strip()
-    ]
-
-    if not damaged:
-        return clean_ocr_text(assemble(pages)), [], warnings
-
-    if len(damaged) > settings.repair_max_pages:
-        warnings.append("TOO_MANY_PAGES_TO_REPAIR")
+    # Une police qu'aucune table connue ne rend lisible reste telle quelle. On
+    # le dit plutôt que de livrer un texte à moitié faux sans le signaler.
+    if plan.unreadable_fonts:
+        warnings.append("UNREADABLE_FONTS")
         logger.warning(
-            "trop de pages à réparer, on garde le texte brut",
-            extra={"pages": len(damaged), "limit": settings.repair_max_pages},
+            "polices non rétablies", extra={"fonts": len(plan.unreadable_fonts)}
         )
-        return clean_ocr_text(assemble(pages)), [], warnings
 
-    repairer = request.app.state.repairer
-    try:
-        repaired = await repairer.repair_pages([pages[n - 1] for n in damaged])
-    except RepairUnavailable:
-        logger.warning("réparation indisponible, on garde le texte brut")
-        warnings.append("REPAIR_UNAVAILABLE")
-        return clean_ocr_text(assemble(pages)), [], warnings
-    except Exception:  # noqa: BLE001
-        logger.exception("échec de la réparation")
-        warnings.append("REPAIR_FAILED")
-        return clean_ocr_text(assemble(pages)), [], warnings
-
-    for number, text in zip(damaged, repaired):
-        pages[number - 1] = text
-
-    return clean_ocr_text(assemble(pages)), damaged, warnings
+    return clean_ocr_text(assemble(pages)), plan, warnings
 
 
 @router.post("/extract", response_model=ExtractResponse)
 async def extract(
     body: ExtractRequest,
-    request: Request,
     settings: Settings = Depends(get_settings),
 ) -> ExtractResponse:
     payload = _decode(body, settings)
-    repaired_pages: list = []
+    plan = RepairPlan(words={}, fonts={}, unreadable_fonts=[])
     warnings: list = []
 
     try:
         if body.media_type == "application/pdf":
-            text, repaired_pages, warnings = await _extract_pdf(payload, request, settings)
+            text, plan, warnings = _extract_pdf(payload, settings)
         else:
             text = load(payload, body.media_type)
     except UnsupportedMediaType as error:
@@ -147,7 +118,7 @@ async def extract(
         )
 
     measured = assess(text)
-    if measured.score < settings.repair_quality_threshold:
+    if measured.score < settings.text_quality_floor:
         warnings.append("LOW_TEXT_QUALITY")
 
     # Le contenu extrait n'est jamais journalisé : c'est du matériel
@@ -159,7 +130,7 @@ async def extract(
             "mediaType": body.media_type,
             "characters": len(text),
             "quality": measured.score,
-            "repairedPages": len(repaired_pages),
+            "wordsRepaired": len(plan.words),
         },
     )
 
@@ -174,7 +145,8 @@ async def extract(
             score=measured.score,
             word_plausibility=measured.word_plausibility,
             cid_markers=measured.cid_markers,
-            pages_repaired=repaired_pages,
+            words_repaired=len(plan.words),
+            unreadable_fonts=plan.unreadable_fonts,
         ),
         warnings=warnings,
     )

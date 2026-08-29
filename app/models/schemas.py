@@ -72,7 +72,10 @@ class ExtractionQuality(Wire):
     score: float
     word_plausibility: float
     cid_markers: int
-    pages_repaired: List[int] = []
+    # Nombre de mots dont l'encodage a été rétabli, et polices qu'aucune table
+    # connue n'a rendues lisibles : le prof sait alors où porter son attention.
+    words_repaired: int = 0
+    unreadable_fonts: List[str] = []
 
 
 class ExtractResponse(Wire):

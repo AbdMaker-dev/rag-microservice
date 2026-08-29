@@ -74,20 +74,15 @@ class Settings(BaseSettings):
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ]
 
-    # --- Réparation du texte extrait ------------------------------------------------
-    # Certains PDF déclarent mal leurs polices et rendent un texte illisible.
-    # Le modèle de langue rétablit les accents à partir du contexte : bien plus
-    # rapide que faire relire l'image, au prix des tableaux et des formules,
-    # dont l'information est perdue avant lui.
-    repair_enabled: bool = True
-    repair_model: str = "qwen2.5:7b"
-    repair_timeout_s: float = Field(default=300.0, ge=10.0, le=3600.0)
-    repair_context_tokens: int = Field(default=8_192, ge=2_048, le=131_072)
-    repair_max_output_tokens: int = Field(default=4_096, ge=256, le=32_768)
-    # Au-delà, on renonce : réparer page par page prendrait des heures.
-    repair_max_pages: int = Field(default=40, ge=1, le=500)
-    # En dessous de ce score, une page est jugée illisible et part en réparation.
-    repair_quality_threshold: float = Field(default=0.90, ge=0.0, le=1.0)
+    # --- Correction de l'encodage du texte extrait ----------------------------------
+    # Certains PDF déclarent une table de caractères et en encodent une autre :
+    # « compétences » ressort en « compŽtences ». C'est une permutation, donc
+    # elle s'inverse exactement. La correction est décidée police par police et
+    # ne fait intervenir aucun modèle de langue — un modèle comblerait les trous
+    # en inventant, ce qui est le pire résultat sur du contenu pédagogique.
+    encoding_repair_enabled: bool = True
+    # En dessous de ce score, le texte rendu est signalé comme douteux au prof.
+    text_quality_floor: float = Field(default=0.90, ge=0.0, le=1.0)
 
     # --- Observability ------------------------------------------------------------
     # Prompts, questions and chunk contents are pedagogical material tied to

@@ -113,8 +113,8 @@ def test_reponse_extraction_se_construit():
         characters=29,
         sections=[],
         quality=ExtractionQuality(
-            score=0.95, word_plausibility=1.0, cid_markers=0, pages_repaired=[1, 3]
+            score=0.95, word_plausibility=1.0, cid_markers=0, words_repaired=12
         ),
     )
-    assert reponse.quality.pages_repaired == [1, 3]
-    assert reponse.model_dump(by_alias=True)["quality"]["pagesRepaired"] == [1, 3]
+    assert reponse.quality.words_repaired == 12
+    assert reponse.model_dump(by_alias=True)["quality"]["wordsRepaired"] == 12

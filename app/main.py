@@ -30,7 +30,6 @@ from app.core.embeddings import build_embedding_provider
 from app.core.logging import configure_logging
 from app.db.engine import Database
 from app.core.retrieval import Retriever
-from app.core.repair import TextRepairer
 from app.db.repository import IndexRepository
 
 logger = logging.getLogger(__name__)
@@ -53,7 +52,6 @@ async def lifespan(app: FastAPI):
     app.state.repository = IndexRepository(database.pool)
     embeddings = build_embedding_provider(settings, client)
     app.state.embeddings = embeddings
-    app.state.repairer = TextRepairer(settings, client)
     app.state.retriever = Retriever(
         embeddings=embeddings, repository=app.state.repository
     )
@@ -63,7 +61,6 @@ async def lifespan(app: FastAPI):
         extra={
             "environment": settings.environment,
             "embeddingModel": settings.embedding_model,
-            "repairModel": settings.repair_model,
         },
     )
     try:
