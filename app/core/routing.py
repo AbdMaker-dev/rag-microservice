@@ -17,6 +17,7 @@ from enum import Enum
 from typing import List
 
 from app.core.pdf_profile import PdfProfile, profile
+from app.core.struct_tree import TreeHealth, inspect
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,7 @@ class Classification:
     route: Route
     script: str
     document: PdfProfile
+    tree: TreeHealth = field(default_factory=TreeHealth)
     ruled_pages: List[int] = field(default_factory=list)
     reason: str = ""
 
@@ -124,18 +126,31 @@ def classify(payload: bytes, script: str = "latin") -> Classification:
             reason=f"écriture {script} : nos tables ne la décrivent pas",
         )
 
-    if described.tagged:
+    # La présence d'un arbre ne suffit pas : il peut être plat, sans type
+    # porteur de sens, ou ne couvrir qu'une partie du texte. Un arbre qui
+    # couvre mal est pire que pas d'arbre, parce qu'on lui fait confiance.
+    tree = inspect(payload) if described.tagged else TreeHealth()
+    if tree.usable:
         return Classification(
-            Route.TAGGED, script, described,
-            reason="le document porte son arbre logique",
+            Route.TAGGED, script, described, tree,
+            reason=(
+                f"arbre logique exploitable : {tree.coverage:.0%} du contenu "
+                f"rattaché, profondeur {tree.depth}"
+            ),
         )
 
     ruled = ruled_pages(payload)
+    if tree.present:
+        motif = (
+            f"arbre présent mais inexploitable ({tree.coverage:.0%} de couverture, "
+            f"profondeur {tree.depth}) : on lit la géométrie"
+        )
+    elif ruled:
+        motif = f"{len(ruled)} page(s) à filets exploitables sur {described.pages}"
+    else:
+        motif = "aucun filet exploitable : la disposition seule fait foi"
+
     return Classification(
-        Route.UNTAGGED, script, described, ruled,
-        reason=(
-            f"{len(ruled)} page(s) à filets exploitables sur {described.pages}"
-            if ruled
-            else "aucun filet exploitable : la disposition seule fait foi"
-        ),
+        Route.UNTAGGED, script, described, tree, ruled,
+        reason=motif,
     )
