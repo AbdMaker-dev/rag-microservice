@@ -146,3 +146,17 @@ def test_une_position_n_est_signalee_qu_une_fois():
     positions = [issue.start for issue in issues if issue.kind == "ENCODING"]
 
     assert len(positions) == len(set(positions))
+
+
+def test_une_section_courte_est_examinee_comme_les_autres():
+    """« RÈpublique du SÈnÈgal » fait vingt et un caractères.
+
+    Dire au professeur qu'elle est « trop courte » lui cache que son vrai
+    défaut est un accent perdu — et c'est ce défaut-là qu'il doit corriger.
+    """
+
+    _, issues = inspect_section("RÈpublique du SÈnÈgal")
+    kinds = [issue.kind for issue in issues]
+
+    assert "THIN" in kinds
+    assert "ENCODING" in kinds

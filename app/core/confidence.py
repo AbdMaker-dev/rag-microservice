@@ -177,10 +177,12 @@ def _formula_issues(text: str) -> List[Issue]:
 def inspect_section(text: str) -> Tuple[float, List[Issue]]:
     """Noter une section et situer ce qui y pose question."""
 
-    if len(text.strip()) < _THIN:
-        return 0.5, [Issue("THIN", 0, len(text), text.strip()[:60])]
-
     issues: List[Issue] = []
+    # Une section courte reste examinée : « RÈpublique du SÈnÈgal » fait
+    # vingt et un caractères, et dire au professeur qu'elle est « trop
+    # courte » lui cache que son vrai défaut est un accent perdu.
+    if len(text.strip()) < _THIN:
+        issues.append(Issue("THIN", 0, len(text), text.strip()[:60]))
     issues.extend(_encoding_issues(text))
     issues.extend(_ocr_issues(text))
     issues.extend(_line_issues(text))
