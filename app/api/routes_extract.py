@@ -34,10 +34,12 @@ from app.core.extraction import (
     to_sections,
 )
 from app.core.routing import Route, classify
+from app.core.confidence import inspect_section
 from app.core.quality import assess
 from app.models.schemas import (
     DocumentAnalysis,
     ExtractedSection,
+    SectionIssue,
     ExtractionQuality,
     ExtractRequest,
     ExtractResponse,
@@ -131,6 +133,27 @@ def _extract_pdf(payload: bytes, settings: Settings) -> tuple:
     )
     logger.info("étapes de lecture", extra={"timings": reading.timings})
     return clean_ocr_text(assemble(pages)), plan, analysis, warnings
+
+
+def _describe(section: dict) -> ExtractedSection:
+    """Rendre une section avec sa note et l'emplacement de ses doutes.
+
+    C'est ce qui permet au professeur de relire dix passages désignés plutôt
+    que cent pages : l'interface trie par confiance et surligne aux offsets.
+    """
+
+    confidence, issues = inspect_section(section["text"])
+    return ExtractedSection(
+        **section,
+        confidence=confidence,
+        issues=[
+            SectionIssue(
+                kind=issue.kind, start=issue.start, end=issue.end,
+                excerpt=issue.excerpt[:120],
+            )
+            for issue in issues
+        ],
+    )
 
 
 @router.post("/extract", response_model=ExtractResponse)
@@ -235,7 +258,7 @@ async def extract(
         media_type=media_type,
         text=text,
         characters=len(text),
-        sections=[ExtractedSection(**section) for section in to_sections(text)],
+        sections=[_describe(section) for section in to_sections(text)],
         quality=ExtractionQuality(
             score=measured.score,
             word_plausibility=measured.word_plausibility,

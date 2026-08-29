@@ -57,6 +57,19 @@ class ExtractRequest(Wire):
     content_base64: str = Field(min_length=1)
 
 
+class SectionIssue(Wire):
+    """Un passage à vérifier, situé par ses positions dans le texte.
+
+    Les offsets sont des indices de caractères dans `text` de la section, pour
+    que l'interface puisse surligner sans avoir à rechercher la chaîne.
+    """
+
+    kind: str
+    start: int
+    end: int
+    excerpt: str = ""
+
+
 class ExtractedSection(Wire):
     """Un bloc de texte et l'endroit d'où il vient."""
 
@@ -64,6 +77,11 @@ class ExtractedSection(Wire):
     locator: str
     text: str
     characters: int
+    # Ce que vaut cette section, et où regarder. Une note globale dit qu'un
+    # document est bon ou mauvais ; elle ne dit pas où un professeur doit
+    # porter les yeux sur cent pages.
+    confidence: float = 1.0
+    issues: List[SectionIssue] = []
 
 
 class ExtractionQuality(Wire):
