@@ -94,3 +94,27 @@ def test_vecteur_au_format_pgvector():
 def test_vecteur_vide_refuse():
     with pytest.raises(ValueError):
         to_vector_literal([])
+
+
+# ------------------------------------------------- contrat de la réponse
+
+from app.models.schemas import ExtractionQuality, ExtractResponse  # noqa: E402
+
+
+def test_reponse_extraction_se_construit():
+    """Le modèle refuse tout champ inconnu ; un nom mal orthographié dans la
+    route ne se voyait qu'au premier appel réel."""
+
+    reponse = ExtractResponse(
+        request_id="r1",
+        filename="doc.pdf",
+        media_type="application/pdf",
+        text="Un texte correct en français.",
+        characters=29,
+        sections=[],
+        quality=ExtractionQuality(
+            score=0.95, word_plausibility=1.0, cid_markers=0, pages_repaired=[1, 3]
+        ),
+    )
+    assert reponse.quality.pages_repaired == [1, 3]
+    assert reponse.model_dump(by_alias=True)["quality"]["pagesRepaired"] == [1, 3]

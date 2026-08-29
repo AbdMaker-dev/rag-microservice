@@ -174,7 +174,7 @@ async def extract(
             score=measured.score,
             word_plausibility=measured.word_plausibility,
             cid_markers=measured.cid_markers,
-            pages_repaired_pages=repaired_pages,
+            pages_repaired=repaired_pages,
         ),
         warnings=warnings,
     )
