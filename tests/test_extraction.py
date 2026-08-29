@@ -188,11 +188,17 @@ def test_un_pied_de_page_qui_varie_avec_la_partie_du_document_est_retire():
 
     from app.core.extraction import _repeated_lines
 
+    # Le contenu doit être distinct autrement que par un chiffre : la
+    # normalisation réduit toute suite de chiffres à un marqueur, si bien que
+    # « paragraphe 3 » et « paragraphe 7 » sont le même texte à ses yeux.
+    mots = ["vecteurs", "barycentre", "trigonométrie", "polynômes", "suites",
+            "dérivées", "intégrales", "probabilités", "statistiques", "limites",
+            "complexes", "arithmétique"]
     pages = []
     for numero in range(1, 25):
         partie = "Seconde S" if numero <= 12 else "Terminales S1 et S3"
         pages.append(
-            f"Contenu propre à la page {numero}.\n"
+            f"Chapitre sur les {mots[numero % len(mots)]} et leurs propriétés.\n"
             f"Programmes de mathématiques - {partie} - Année 2006 {numero}"
         )
 
@@ -202,4 +208,4 @@ def test_un_pied_de_page_qui_varie_avec_la_partie_du_document_est_retire():
     assert any("Terminales" in ligne for ligne in bruit)
     # Le contenu propre à chaque page ne doit jamais être confondu avec de
     # l'habillage, même avec un seuil aussi bas.
-    assert not any("Contenu propre" in ligne for ligne in bruit)
+    assert not any("Chapitre sur les" in ligne for ligne in bruit)
