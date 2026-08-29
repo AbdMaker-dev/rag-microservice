@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+from collections import defaultdict
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from statistics import median
@@ -22,6 +23,8 @@ from typing import Callable, Dict, List
 from app.core.encoding import RepairPlan, apply_plan, build_plan
 from app.core.pdf_encoding import repair_pdf
 from app.core.pdf_profile import PdfProfile, is_tagged, measure_page
+from app.core.struct_tree import TreeHealth, inspect
+from app.core import tagged_reader
 from app.core.quality import assess
 
 _CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -159,6 +162,8 @@ class PdfReading:
     profile: PdfProfile
     ruled_pages: List[int]
     timings: Dict[str, float] = field(default_factory=dict)
+    tree: TreeHealth = field(default_factory=TreeHealth)
+    read_by_tree: bool = False
 
 
 @contextmanager
@@ -206,6 +211,7 @@ def read_pdf_document(payload: bytes, repair: bool = True) -> PdfReading:
 
     pages: List[str] = []
     pages_words: List[list] = []
+    marks: Dict[tuple, List[str]] = defaultdict(list)
     coverages: List[float] = []
     needing_ocr: List[int] = []
     ruled: List[int] = []
@@ -235,7 +241,7 @@ def read_pdf_document(payload: bytes, repair: bool = True) -> PdfReading:
                 pages.append("\n\n".join(parts))
 
                 try:
-                    words = page.extract_words(extra_attrs=["fontname"])
+                    words = page.extract_words(extra_attrs=["fontname", "mcid"])
                 except Exception:  # noqa: BLE001
                     # Un PDF peut refuser de livrer ses polices. On garde alors
                     # le texte tel quel : sans police, aucune correction n'est
@@ -244,7 +250,28 @@ def read_pdf_document(payload: bytes, repair: bool = True) -> PdfReading:
                     words = []
                 pages_words.append(words)
 
+                # Le texte de chaque contenu marqué, relevé au passage : c'est
+                # le pont vers l'arbre de structure, et il ne coûte rien ici.
+                for word in words:
+                    mark = word.get("mcid")
+                    if mark is not None:
+                        marks[(number, int(mark))].append(word["text"])
+
                 measure_page(number, page, words, coverages, needing_ocr, ruled)
+
+    # Le document porte-t-il un plan exploitable ? Si oui, on le suit : il
+    # donne les cellules d'un tableau sans avoir à les deviner, et désigne son
+    # propre décor comme « Artifact » au lieu de nous le faire compter.
+    tree = TreeHealth()
+    by_tree = False
+    with _step(timings, "arbre"):
+        tree = inspect(payload)
+        if tree.usable:
+            structured = tagged_reader.read(
+                payload, {key: " ".join(parts) for key, parts in marks.items()}
+            )
+            if any(body.strip() for body in structured):
+                pages, by_tree = structured, True
 
     described = PdfProfile(
         pages=len(coverages),
@@ -266,7 +293,7 @@ def read_pdf_document(payload: bytes, repair: bool = True) -> PdfReading:
                     pages = [apply_plan(page, plan) for page in pages]
                     logger.info("rattrapage mot à mot", extra={"words": len(plan.words)})
 
-    return PdfReading(pages, plan, fonts, described, ruled, timings)
+    return PdfReading(pages, plan, fonts, described, ruled, timings, tree, by_tree)
 
 
 def read_pdf_pages(payload: bytes) -> list:

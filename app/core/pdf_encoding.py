@@ -147,7 +147,9 @@ def scan_codes(payload: bytes) -> Dict[str, Counter]:
     with _raw_codes():
         with pdfplumber.open(io.BytesIO(payload)) as document:
             total = len(document.pages)
-            step = max(1, total // _SCAN_PAGES) if total > _SCAN_PAGES else 1
+            # Division entière arrondie vers le haut : sur 43 pages, « 43 // 30 »
+            # vaut 1 et ne saute aucune page.
+            step = max(1, -(-total // _SCAN_PAGES))
             for page in document.pages[::step]:
                 for char in page.chars:
                     text = char.get("text") or ""
