@@ -393,6 +393,42 @@ def declared_encodings(payload: bytes) -> Dict[str, str]:
     return found
 
 
+def differences_map(font) -> Dict[int, str]:
+    """Traduire le tableau /Differences déclaré par une police.
+
+    C'est la parole du document : il énonce lui-même quel code porte quel
+    glyphe. Quand elle existe sans /ToUnicode, on la matérialise plutôt que de
+    laisser chaque lecteur la réinterpréter à sa façon.
+    """
+
+    from pdfminer.encodingdb import name2unicode
+
+    encoding = font.get("/Encoding")
+    if encoding is None:
+        return {}
+    encoding = encoding.get_object()
+    if not hasattr(encoding, "get"):
+        return {}
+    differences = encoding.get("/Differences")
+    if not differences:
+        return {}
+
+    mapping: Dict[int, str] = {}
+    code = 0
+    for item in differences.get_object():
+        raw = item.get_object() if hasattr(item, "get_object") else item
+        if isinstance(raw, (int, float)):
+            code = int(raw)
+            continue
+        name = str(raw).lstrip("/")
+        try:
+            mapping[code] = name2unicode(name)
+        except Exception:  # noqa: BLE001
+            pass  # glyphe hors répertoire connu : on le laisse tel quel
+        code += 1
+    return mapping
+
+
 def _cmap(mapping: Dict[int, str]) -> bytes:
     """Composer une CMap /ToUnicode pour une police.
 
@@ -481,9 +517,15 @@ def rewrite(payload: bytes, decisions: List[FontDecision], counts: Dict[str, Cou
             base = str(font.get("/BaseFont", "")).lstrip("/")
             decision = plan.get(base)
             if decision is None:
-                continue
-
-            mapping = unicode_map(decision, counts.get(base, {}))
+                # Pas de diagnostic pour cette police : si elle déclare un
+                # /Differences, on le matérialise. Le document se décrit alors
+                # lui-même, et n'importe quel lecteur en tire le même texte.
+                declared_map = differences_map(font)
+                if not declared_map:
+                    continue
+                mapping = declared_map
+            else:
+                mapping = unicode_map(decision, counts.get(base, {}))
             # Les codes ASCII se traduisent par eux-mêmes. Les inscrire évite
             # qu'un lecteur ne trouve rien pour eux une fois la CMap présente.
             for code in counts.get(base, {}):

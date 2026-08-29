@@ -118,3 +118,41 @@ def test_reponse_extraction_se_construit():
     )
     assert reponse.quality.words_repaired == 12
     assert reponse.model_dump(by_alias=True)["quality"]["wordsRepaired"] == 12
+
+
+def test_la_reponse_porte_l_analyse_du_document_sans_casser_le_contrat():
+    """`analysis` est additive : un appelant qui l'ignore voit la même réponse."""
+
+    from app.models.schemas import (
+        DocumentAnalysis,
+        ExtractionQuality,
+        ExtractResponse,
+        FontDiagnosis,
+    )
+
+    reponse = ExtractResponse(
+        request_id="r-1",
+        filename="programme.pdf",
+        media_type="application/pdf",
+        text="Compétences exigibles",
+        characters=21,
+        sections=[],
+        quality=ExtractionQuality(
+            score=0.99, word_plausibility=0.99, cid_markers=0, words_repaired=0
+        ),
+        analysis=DocumentAnalysis(
+            tagged=False,
+            text_coverage=0.149,
+            pages_needing_ocr=[3],
+            fonts=[FontDiagnosis(font="Times-Roman", table="mac_roman",
+                                 confidence=1.0, samples=1436)],
+        ),
+    )
+
+    rendu = reponse.model_dump(by_alias=True)
+    assert rendu["analysis"]["pagesNeedingOcr"] == [3]
+    assert rendu["analysis"]["fonts"][0]["table"] == "mac_roman"
+    assert rendu["analysis"]["textCoverage"] == 0.149
+    # Les clés historiques restent en place et au même endroit.
+    assert rendu["contractVersion"] == "1.0"
+    assert rendu["quality"]["score"] == 0.99

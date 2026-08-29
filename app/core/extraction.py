@@ -139,7 +139,7 @@ def _read_pdf_text(payload: bytes) -> tuple:
 
 
 def read_pdf_document(payload: bytes, repair: bool = True) -> tuple:
-    """Lire un PDF et corriger son encodage. Renvoie (pages, plan).
+    """Lire un PDF et corriger son encodage. Renvoie (pages, plan, polices).
 
     Deux passes sur une seule ouverture du fichier. La première relève le
     texte de chaque page et la police de chaque mot ; la seconde applique la
@@ -206,13 +206,13 @@ def read_pdf_document(payload: bytes, repair: bool = True) -> tuple:
             if not plan.is_empty:
                 pages = [apply_plan(page, plan) for page in pages]
                 logger.info("rattrapage mot à mot", extra={"words": len(plan.words)})
-    return pages, plan
+    return pages, plan, fonts
 
 
 def read_pdf_pages(payload: bytes) -> list:
     """Texte de chaque page, dans l'ordre. Une page vide reste une chaîne vide."""
 
-    pages, _ = read_pdf_document(payload)
+    pages, _, _ = read_pdf_document(payload)
     return pages
 
 
@@ -244,7 +244,7 @@ def load_pdf(payload: bytes, **_ignored) -> str:
     tests, exploration.
     """
 
-    pages, _ = read_pdf_document(payload)
+    pages, _, _ = read_pdf_document(payload)
     return clean_ocr_text(assemble(pages))
 
 

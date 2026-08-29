@@ -32,12 +32,15 @@ from app.core.extraction import (
     read_pdf_document,
     to_sections,
 )
+from app.core.pdf_profile import profile
 from app.core.quality import assess
 from app.models.schemas import (
+    DocumentAnalysis,
     ExtractedSection,
     ExtractionQuality,
     ExtractRequest,
     ExtractResponse,
+    FontDiagnosis,
 )
 
 logger = logging.getLogger(__name__)
@@ -67,10 +70,24 @@ def _decode(request: ExtractRequest, settings: Settings) -> bytes:
 
 
 def _extract_pdf(payload: bytes, settings: Settings) -> tuple:
-    """Lire un PDF et rétablir son encodage. Renvoie (texte, plan, avertissements)."""
+    """Lire un PDF et rétablir son encodage.
 
-    pages, plan = read_pdf_document(payload, repair=settings.encoding_repair_enabled)
+    Renvoie (texte, plan, analyse, avertissements).
+    """
+
+    described = profile(payload)
+    pages, plan, fonts = read_pdf_document(
+        payload, repair=settings.encoding_repair_enabled
+    )
     warnings: list = []
+
+    # Une page sans couche texte ne se rattrape pas à la lecture. On le dit,
+    # au lieu de rendre une page vide sans explication.
+    if described.needs_ocr:
+        warnings.append("NEEDS_OCR")
+        logger.info(
+            "pages sans couche texte", extra={"pages": len(described.pages_needing_ocr)}
+        )
 
     # Une police qu'aucune table connue ne rend lisible reste telle quelle. On
     # le dit plutôt que de livrer un texte à moitié faux sans le signaler.
@@ -80,7 +97,22 @@ def _extract_pdf(payload: bytes, settings: Settings) -> tuple:
             "polices non rétablies", extra={"fonts": len(plan.unreadable_fonts)}
         )
 
-    return clean_ocr_text(assemble(pages)), plan, warnings
+    analysis = DocumentAnalysis(
+        tagged=described.tagged,
+        text_coverage=described.text_coverage,
+        pages_needing_ocr=described.pages_needing_ocr,
+        fonts=[
+            FontDiagnosis(
+                font=font.fontname,
+                table=font.encoding,
+                confidence=font.confidence,
+                samples=font.samples,
+            )
+            for font in fonts
+            if font.changed
+        ],
+    )
+    return clean_ocr_text(assemble(pages)), plan, analysis, warnings
 
 
 @router.post("/extract", response_model=ExtractResponse)
@@ -90,11 +122,12 @@ async def extract(
 ) -> ExtractResponse:
     payload = _decode(body, settings)
     plan = RepairPlan(words={}, fonts={}, unreadable_fonts=[])
+    analysis = None
     warnings: list = []
 
     try:
         if body.media_type == "application/pdf":
-            text, plan, warnings = _extract_pdf(payload, settings)
+            text, plan, analysis, warnings = _extract_pdf(payload, settings)
         else:
             text = load(payload, body.media_type)
     except UnsupportedMediaType as error:
@@ -148,5 +181,6 @@ async def extract(
             words_repaired=len(plan.words),
             unreadable_fonts=plan.unreadable_fonts,
         ),
+        analysis=analysis,
         warnings=warnings,
     )

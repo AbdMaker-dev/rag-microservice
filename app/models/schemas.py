@@ -78,6 +78,29 @@ class ExtractionQuality(Wire):
     unreadable_fonts: List[str] = []
 
 
+class FontDiagnosis(Wire):
+    """Ce qu'on a conclu pour une police du document."""
+
+    font: str
+    table: Optional[str] = None
+    confidence: float = 0.0
+    samples: int = 0
+
+
+class DocumentAnalysis(Wire):
+    """Ce qu'est le document, avant même ce qu'il dit.
+
+    Additive et ignorable : un appelant qui ne la lit pas voit la même réponse
+    qu'avant. Elle sert à router — un PDF balisé porte son propre plan, une
+    page sans couche texte demande l'OCR.
+    """
+
+    tagged: bool = False
+    text_coverage: float = 0.0
+    pages_needing_ocr: List[int] = []
+    fonts: List[FontDiagnosis] = []
+
+
 class ExtractResponse(Wire):
     contract_version: Literal["1.0"] = CONTRACT_VERSION
     request_id: str
@@ -87,6 +110,7 @@ class ExtractResponse(Wire):
     characters: int
     sections: List[ExtractedSection]
     quality: ExtractionQuality
+    analysis: Optional[DocumentAnalysis] = None
     warnings: List[str] = []
 
 
