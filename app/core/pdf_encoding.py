@@ -135,7 +135,13 @@ def _raw_codes():
 # stable, et parcourir 99 pages pour l'établir coûte sept secondes. Les pages
 # retenues sont réparties sur tout le document, pour ne pas manquer une police
 # qui n'apparaîtrait qu'à la fin.
-_SCAN_PAGES = 30
+#
+# Valeur mesurée sur le programme national, 99 pages, 25 polices : à 30 pages
+# deux polices peu fréquentes échappent au tirage et le score tombe de 0,9935
+# à 0,9916 ; à 40 le score est celui du parcours complet pour 2,8 s au lieu de
+# 6,5. Au-delà on paie sans rien gagner. À revoir si un document présente
+# beaucoup de polices rares.
+_SCAN_PAGES = 40
 
 
 def scan_codes(payload: bytes) -> Dict[str, Counter]:
