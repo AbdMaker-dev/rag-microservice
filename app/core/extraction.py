@@ -16,6 +16,7 @@ import tempfile
 from typing import Callable, Dict, List
 
 from app.core.encoding import RepairPlan, apply_plan, build_plan
+from app.core.pdf_encoding import repair_pdf
 
 _CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _EXCESS_BLANK_LINES = re.compile(r"\n{3,}")
@@ -127,6 +128,16 @@ def read_pdf_document(payload: bytes, repair: bool = True) -> tuple:
         import pdfplumber
     except ImportError as error:  # pragma: no cover
         raise UnsupportedMediaType("pdfplumber n'est pas installé") from error
+
+    fonts: list = []
+    if repair:
+        # On corrige d'abord le PDF lui-même : chaque police reçoit la table
+        # qui décode réellement son texte. Le document sort alors juste dès la
+        # première lecture, au lieu d'être rattrapé mot à mot ensuite.
+        try:
+            payload, fonts = repair_pdf(payload)
+        except Exception:  # noqa: BLE001
+            logger.warning("réécriture du PDF impossible, lecture telle quelle")
 
     pages: list = []
     pages_words: list = []

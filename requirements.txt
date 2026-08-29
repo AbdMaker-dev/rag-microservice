@@ -16,3 +16,6 @@ python-docx==1.2.0
 # Découpage conscient des tokens. Optionnel au runtime : le chunking retombe
 # sur une heuristique déterministe en son absence.
 tiktoken==0.13.0
+
+# Réécriture de la CMap /ToUnicode : corriger la police, pas le texte.
+pypdf==6.2.0
