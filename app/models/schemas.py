@@ -95,6 +95,7 @@ class DocumentAnalysis(Wire):
     page sans couche texte demande l'OCR.
     """
 
+    route: str = "untagged"
     tagged: bool = False
     text_coverage: float = 0.0
     pages_needing_ocr: List[int] = []

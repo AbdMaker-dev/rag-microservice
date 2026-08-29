@@ -32,7 +32,8 @@ from app.core.extraction import (
     read_pdf_document,
     to_sections,
 )
-from app.core.pdf_profile import profile
+from app.core.pdf_encoding import dominant_script, fonts_with_tounicode
+from app.core.routing import Route, classify
 from app.core.quality import assess
 from app.models.schemas import (
     DocumentAnalysis,
@@ -75,7 +76,23 @@ def _extract_pdf(payload: bytes, settings: Settings) -> tuple:
     Renvoie (texte, plan, analyse, avertissements).
     """
 
-    described = profile(payload)
+    script = dominant_script(payload, fonts_with_tounicode(payload))
+    decision = classify(payload, script)
+    described = decision.document
+    logger.info(
+        "voie de lecture",
+        extra={"route": decision.route.value, "reason": decision.reason},
+    )
+
+    # Chaque voie reste une voie. Aujourd'hui elles convergent toutes vers la
+    # lecture géométrique : c'est le seul lecteur écrit. La branche balisée
+    # existe pour recevoir la lecture de l'arbre logique, qui rendra les
+    # tableaux et l'ordre de lecture sans aucune heuristique — mais tant
+    # qu'elle n'est pas écrite, mieux vaut une voie nommée et vide qu'un
+    # chemin unique qui se fige à la racine.
+    if decision.route is Route.TAGGED:
+        pass  # à venir : lecture de /StructTreeRoot
+
     pages, plan, fonts = read_pdf_document(
         payload, repair=settings.encoding_repair_enabled
     )
@@ -98,6 +115,7 @@ def _extract_pdf(payload: bytes, settings: Settings) -> tuple:
         )
 
     analysis = DocumentAnalysis(
+        route=decision.route.value,
         tagged=described.tagged,
         text_coverage=described.text_coverage,
         pages_needing_ocr=described.pages_needing_ocr,
@@ -145,6 +163,18 @@ async def extract(
         ) from error
 
     if not text.strip():
+        # Un document scanné n'a pas « échoué » : il demande un autre outil.
+        # Le dire évite à l'appelant de chercher une erreur là où il n'y en a
+        # pas, et lui indique quelles pages passer à l'OCR.
+        if analysis is not None and analysis.pages_needing_ocr:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "DOCUMENT_NEEDS_OCR",
+                    "pagesNeedingOcr": analysis.pages_needing_ocr,
+                    "pages": len(analysis.pages_needing_ocr),
+                },
+            )
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={"code": "DOCUMENT_HAS_NO_EXTRACTABLE_TEXT"},
