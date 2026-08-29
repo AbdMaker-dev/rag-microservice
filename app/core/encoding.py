@@ -136,8 +136,9 @@ def _rescue(word: str) -> str:
     found = set()
     for _label, table, reelle in _ALL_TABLES:
         candidate = _CID.sub(
-            lambda match: _byte_as(int(match.group(1)), reelle, match.group(0)), word
-        ).translate(table)
+            lambda match: _byte_as(int(match.group(1)), reelle, match.group(0)),
+            word.translate(table),
+        )
         if candidate == word or len(_WORDS.findall(candidate)) > before:
             continue
         if _reads_as_french(candidate):
@@ -157,12 +158,18 @@ class FontRepair:
     def apply(self, word: str) -> str:
         if self.is_symbol:
             return _repair_symbol(word)
+        # La table d'abord, les marqueurs (cid:) ensuite. Un marqueur porte un
+        # code d'octet que l'on décode déjà correctement ; le passer ensuite
+        # dans la table le recorromprait — « (cid:143) » donne « è », que la
+        # table transformerait en « Ë ». C'est l'origine des « élËves ».
+        if self.table:
+            word = word.translate(self.table)
         if self.source_encoding:
             word = _CID.sub(
                 lambda match: _byte_as(int(match.group(1)), self.source_encoding, match.group(0)),
                 word,
             )
-        return word.translate(self.table) if self.table else word
+        return word
 
 
 @dataclass(frozen=True)
