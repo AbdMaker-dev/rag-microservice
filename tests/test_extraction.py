@@ -209,3 +209,34 @@ def test_un_pied_de_page_qui_varie_avec_la_partie_du_document_est_retire():
     # Le contenu propre à chaque page ne doit jamais être confondu avec de
     # l'habillage, même avec un seuil aussi bas.
     assert not any("Chapitre sur les" in ligne for ligne in bruit)
+
+
+def test_un_titre_repete_sans_chiffre_n_est_pas_de_l_habillage():
+    """« INTRODUCTION GENERALE » ouvre quatre parties du programme national.
+
+    Le filtre l'effaçait — de la perte de contenu. Un vrai pied de page porte
+    presque toujours un numéro de page ou une année ; un titre de partie, non.
+    """
+
+    from app.core.extraction import _repeated_lines
+
+    pages = []
+    for numero in range(1, 25):
+        tete = "INTRODUCTION GENERALE" if numero % 6 == 0 else f"Chapitre {numero}"
+        pages.append(f"{tete}\nDu contenu qui change.\nHarmonisation Page {numero}")
+
+    bruit = _repeated_lines(pages)
+
+    assert not any("INTRODUCTION" in ligne for ligne in bruit)
+    assert any("Harmonisation" in ligne for ligne in bruit)
+
+
+def test_un_pied_de_page_aux_espaces_parasites_est_quand_meme_reconnu():
+    """« Année 200 6 71 » : l'espace dans « 200 6 » cassait la normalisation."""
+
+    from app.core.extraction import _normalise_digits
+
+    assert _normalise_digits("Année 200 6 71") == _normalise_digits("Année 2006 12")
+    assert _normalise_digits("Seconde  S -  Année 2006 5") == _normalise_digits(
+        "Seconde S - Année 2006 71"
+    )

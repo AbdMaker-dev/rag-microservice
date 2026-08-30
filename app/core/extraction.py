@@ -536,6 +536,14 @@ def _repeated_lines(pages: list, threshold: float = 0.04) -> set:
             # les exclure évite de supprimer une ligne de programme répétée.
             if line.startswith("|"):
                 continue
+            # Sans chiffre, ce n'est pas un titre courant. « INTRODUCTION
+            # GENERALE » revient en tête de quatre parties du programme
+            # national, « DISCIPLINE : Mathématiques » ouvre chaque bloc de
+            # niveau de PHARES : les deux étaient effacés — de la perte de
+            # contenu. Un vrai pied de page porte presque toujours un numéro
+            # de page ou une année, et c'est lui qui varie.
+            if not any(character.isdigit() for character in line):
+                continue
             if 3 <= len(line) <= 120:
                 counts[_normalise_digits(line)] = counts.get(_normalise_digits(line), 0) + 1
 
@@ -553,9 +561,15 @@ def _normalise_digits(line: str) -> str:
     chiffre : remplacer caractère par caractère laisse « 2006 1 » et
     « 2006 12 » différents, et le pied de page n'est alors jamais reconnu
     comme répété — chaque page en porte une variante unique.
+
+    Les espaces se normalisent aussi : « Année 200 6 » — l'espace parasite
+    vient de l'extraction — doit rejoindre « Année 2006 ». Chiffres d'abord,
+    puis fusion des marqueurs voisins, puis espaces.
     """
 
-    return _DIGIT_RUN.sub("#", line)
+    reduced = _DIGIT_RUN.sub("#", line)
+    reduced = re.sub(r"#(?:\s*#)+", "#", reduced)
+    return re.sub(r"\s+", " ", reduced).strip()
 
 
 def _join_broken_lines(text: str) -> str:
