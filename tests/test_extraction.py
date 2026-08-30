@@ -387,3 +387,25 @@ def test_les_embeddings_partent_par_lots():
     assert len(vectors) == 37
     assert all(size <= settings.embedding_batch_size for size in calls)
     assert len(calls) >= 3
+
+
+def test_la_route_search_transmet_vraiment_ses_filtres():
+    """Deux correctifs précédents avaient « ajouté » ces filtres sans les
+    brancher : le remplacement de texte visait la mauvaise indentation et
+    échouait en silence. Le contrat acceptait courseId et role — et les
+    ignorait. Ce test lit le code : si un champ du contrat n'atteint pas la
+    recherche, il casse.
+    """
+
+    import inspect
+
+    from app.api import routes_search
+    from app.core.retrieval import Retriever
+
+    source = inspect.getsource(routes_search.search)
+    assert "course_id=body.course_id" in source
+    assert "role=body.role" in source
+
+    signature = inspect.signature(Retriever.search)
+    assert "course_id" in signature.parameters
+    assert "role" in signature.parameters

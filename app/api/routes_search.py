@@ -32,6 +32,8 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse:
             scope=body.scope,
             limit=body.limit,
             max_excerpt_characters=body.max_excerpt_characters,
+            course_id=body.course_id,
+            role=body.role,
             document_ids=body.document_ids or None,
         )
     except EmbeddingError as error:

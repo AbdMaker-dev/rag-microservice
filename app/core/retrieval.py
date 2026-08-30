@@ -55,6 +55,8 @@ class Retriever:
         scope: Scope,
         limit: int,
         max_excerpt_characters: int,
+        course_id: Optional[str] = None,
+        role: Optional[str] = None,
         document_ids: Optional[Sequence[str]] = None,
     ) -> List[Passage]:
         vectors = await self._embeddings.embed([query])
@@ -62,6 +64,8 @@ class Retriever:
             embedding=vectors[0],
             scope=scope,
             limit=limit,
+            course_id=course_id,
+            role=role,
             document_ids=document_ids,
         )
 
