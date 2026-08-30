@@ -68,6 +68,23 @@ class GeneratedCourse:
     warnings: List[str] = field(default_factory=list)
 
 
+def _context_line(scope: Scope) -> str:
+    """Dire au modèle pour qui il écrit.
+
+    Le périmètre filtrait déjà ses recherches, mais ne lui était jamais
+    énoncé : sans cette ligne, l'IA ignore qu'elle écrit pour une seconde S
+    et ne peut calibrer ni le niveau de langue ni la difficulté. Et le pays
+    était écrit en dur « sénégalais » — faux dès le premier cours malien.
+    """
+
+    serie = f", série {scope.track}" if scope.track else ""
+    return (
+        f"Matière : {scope.subject}. Classe : {scope.grade}{serie} "
+        f"({scope.level}), pays {scope.country}, programme officiel "
+        f"{scope.curriculum_version}, langue d'enseignement {scope.language}."
+    )
+
+
 def _parse_json_block(raw: str) -> Optional[dict]:
     """Le modèle répond parfois avec du texte autour du JSON : on l'isole."""
 
@@ -163,7 +180,7 @@ class CourseGenerator:
             warnings.append("NO_OFFICIAL_CURRICULUM_IN_SCOPE")
 
         # 2. Le plan.
-        title, headings = await self._plan(instruction, frame)
+        title, headings = await self._plan(instruction, scope, frame)
 
         # 3. La rédaction, section par section.
         sections: List[SectionDraft] = []
@@ -172,6 +189,7 @@ class CourseGenerator:
                 await self._write_section(
                     heading=heading,
                     instruction=instruction,
+                    scope=scope,
                     strictness=strictness,
                     frame=frame,
                     search=search,
@@ -191,15 +209,16 @@ class CourseGenerator:
     # ------------------------------------------------------------------ étapes
 
     async def _plan(
-        self, instruction: str, frame: List[Passage]
+        self, instruction: str, scope: Scope, frame: List[Passage]
     ) -> Tuple[str, List[str]]:
         raw = await self._chat(
             [
                 {
                     "role": "system",
                     "content": (
-                        "Tu prépares le plan d'un cours pour un professeur "
-                        "sénégalais. Réponds UNIQUEMENT en JSON : "
+                        "Tu prépares le plan d'un cours pour un professeur. "
+                        + _context_line(scope)
+                        + " Réponds UNIQUEMENT en JSON : "
                         '{"titre": "...", "sections": ["...", "..."]}. '
                         "De 3 à "
                         f"{self._settings.generation_max_sections} sections, "
@@ -229,6 +248,7 @@ class CourseGenerator:
         *,
         heading: str,
         instruction: str,
+        scope: Scope,
         strictness: str,
         frame: List[Passage],
         search,
@@ -260,8 +280,9 @@ class CourseGenerator:
             {
                 "role": "system",
                 "content": (
-                    "Tu rédiges une section d'un cours, en français, pour des "
-                    f"élèves. {rules}\n"
+                    "Tu rédiges une section d'un cours pour des élèves. "
+                    + _context_line(scope)
+                    + f" {rules}\n"
                     "Si les extraits ne suffisent pas, tu peux demander une "
                     "recherche en répondant UNIQUEMENT : "
                     '{"chercher": {"question": "...", "nature": '

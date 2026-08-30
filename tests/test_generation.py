@@ -132,3 +132,22 @@ def test_le_plafond_de_recherches_borne_le_modele():
     solicited = [c for c in course.queries if c["demandeParLeModele"]]
     assert len(solicited) == 1, "au-delà du plafond, la recherche est refusée"
     assert course.sections[0].text.startswith("Fini")
+
+
+def test_le_modele_sait_pour_qui_il_ecrit():
+    """Le périmètre filtrait les recherches mais n'était jamais énoncé.
+
+    Sans cette ligne, l'IA ignore qu'elle écrit pour une seconde S — et le
+    pays était écrit en dur « sénégalais », faux dès le premier cours malien.
+    """
+
+    plan = json.dumps({"titre": "T", "sections": ["Définition"]})
+    llm = ScriptedLlm([plan, "Texte [S1]."])
+
+    asyncio.run(_generator(llm).generate(
+        instruction="cours", scope=SCOPE, course_id="c", strictness="grounded"))
+
+    for exchange in llm.exchanges:
+        system = exchange[0]["content"]
+        assert "seconde" in system and "série S" in system and "SN" in system
+        assert "sénégalais" not in system
