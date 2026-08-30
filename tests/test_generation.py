@@ -212,3 +212,25 @@ def test_une_revision_qui_ne_vise_rien_echoue_clairement():
         assert "révision" in str(error)
     else:
         raise AssertionError("un plan de révision vide doit échouer")
+
+
+def test_les_consignes_precedentes_suivent_la_conversation():
+    """« Comme je t'ai dit, garde un ton simple » doit encore compter.
+
+    L'historique vient de la table de discussion côté plateforme ; le service
+    le lit à chaque tour et ne le stocke jamais.
+    """
+
+    plan = json.dumps({"operations": [
+        {"action": "reecrire", "section": "Définition", "consigne": "simplifier"}]})
+    llm = ScriptedLlm([plan, "Définition simple [S1]."])
+
+    asyncio.run(_generator(llm).adjust(
+        title="T", sections=_course_sections(), request="simplifie encore",
+        instruction="cours", scope=SCOPE, course_id="c", strictness="grounded",
+        history=[{"author": "prof", "message": "garde un ton simple"},
+                 {"author": "prof", "message": "pas de jargon"}]))
+
+    premier_echange = llm.exchanges[0][1]["content"]
+    assert "garde un ton simple" in premier_echange
+    assert "pas de jargon" in premier_echange

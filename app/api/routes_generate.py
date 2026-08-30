@@ -119,6 +119,7 @@ async def adjust(
             scope=body.scope,
             course_id=body.course_id,
             strictness=body.strictness,
+            history=body.history,
         )
     )
     logger.info(

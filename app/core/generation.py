@@ -217,6 +217,7 @@ class CourseGenerator:
         scope: Scope,
         course_id: str,
         strictness: str,
+        history: Optional[List[dict]] = None,
     ) -> GeneratedCourse:
         """Réviser un cours existant sur consigne du professeur.
 
@@ -260,7 +261,7 @@ class CourseGenerator:
             )
             return passages
 
-        plan = await self._adjustment_plan(title, sections, request, scope)
+        plan = await self._adjustment_plan(title, sections, request, scope, history or [])
         frame = await search(
             f"{instruction} — {request}", "programme-officiel", from_model=False
         )
@@ -327,7 +328,8 @@ class CourseGenerator:
         )
 
     async def _adjustment_plan(
-        self, title: str, sections: List[dict], request: str, scope: Scope
+        self, title: str, sections: List[dict], request: str, scope: Scope,
+        history: List[dict],
     ) -> dict:
         """Demander au modèle quoi toucher — et seulement quoi toucher."""
 
@@ -355,7 +357,18 @@ class CourseGenerator:
                     "role": "user",
                     "content": (
                         f"Cours : {title}\nSections :\n{summary}\n\n"
-                        f"Demande du professeur : {request}"
+                        + (
+                            "Consignes précédentes de la conversation "
+                            "(à respecter encore) :\n"
+                            + "\n".join(
+                                f"- {entry.get('author', '?')} : {entry.get('message', '')}"
+                                for entry in history[-10:]
+                            )
+                            + "\n\n"
+                            if history
+                            else ""
+                        )
+                        + f"Demande du professeur : {request}"
                     ),
                 },
             ]

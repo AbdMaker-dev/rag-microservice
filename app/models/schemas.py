@@ -270,6 +270,11 @@ class AdjustRequest(Wire):
     # Ce que le professeur demande : « revois la partie 2, ajoute des
     # exercices, retire l'anecdote »…
     request: str = Field(min_length=3, max_length=4000)
+    # Les dernières consignes de la conversation, tirées de la table de
+    # discussion côté plateforme. Sans elles, chaque tour serait amnésique :
+    # « comme je t'ai dit, garde un ton simple » ne marcherait pas. Le service
+    # les lit et ne les stocke jamais.
+    history: List[Dict[str, str]] = Field(default_factory=list, max_length=20)
 
 
 class GenerateAccepted(Wire):
