@@ -29,6 +29,26 @@ logger = logging.getLogger(__name__)
 # le même habillage.
 _DIGIT_RUN = re.compile(r"\d+")
 
+
+def normalised_key(text: str) -> str:
+    """La clé sous laquelle un habillage se reconnaît, d'une page à l'autre.
+
+    LE normaliseur — au singulier. Il en existait deux : celui du nettoyage
+    final fusionnait les suites de chiffres, celui-ci non, et le pied de page
+    « Année 200 6 71 » formait sa propre famille dans le détecteur qui fait le
+    vrai travail. Deux normaliseurs qui divergent, c'est deux familles pour le
+    même habillage.
+
+    L'ordre des opérations vient d'un cas réel : « S 4 » et « S4 »,
+    « 200 6 71 » et « 2006 71 » doivent converger. On efface donc les espaces
+    au contact d'un chiffre AVANT de substituer — après, il est trop tard, la
+    coupure a déjà séparé les marqueurs.
+    """
+
+    text = re.sub(r"\s+(?=\d)|(?<=\d)\s+", "", text)
+    text = _DIGIT_RUN.sub("#", text)
+    return re.sub(r"\s+", " ", text).strip()
+
 # --- Rapports, et ce qu'ils valent sur le programme national ----------------
 # Mesuré sur ce document : hauteur de ligne 10,8 pt, largeur d'espace 2,7 pt,
 # interligne 12,5 pt. Les rapports ci-dessous y donnent 2,7 / 4,1 / 7,5 pt.
@@ -247,7 +267,7 @@ def furniture(pages_lines: Sequence[Sequence[Sequence[dict]]]) -> set:
             text = " ".join(word["text"] for word in line).strip()
             # Les chiffres varient d'une page à l'autre : « page 12 » et
             # « page 13 » sont le même habillage.
-            normalised = _DIGIT_RUN.sub("#", text)
+            normalised = normalised_key(text)
             # Sans chiffre, ce n'est pas un titre courant : c'est du contenu
             # qui se répète, typiquement l'en-tête d'un tableau reconduit de
             # page en page.
@@ -262,7 +282,7 @@ def furniture(pages_lines: Sequence[Sequence[Sequence[dict]]]) -> set:
 
 def _is_furniture(line: Sequence[dict], known: set) -> bool:
     text = " ".join(word["text"] for word in line).strip()
-    return _DIGIT_RUN.sub("#", text) in known
+    return normalised_key(text) in known
 
 
 def _straddlers(line: Sequence[dict], boundaries: Sequence[float], slack: float) -> int:

@@ -123,13 +123,32 @@ def _ocr_issues(text: str) -> List[Issue]:
             run.append((match.start(), match.end()))
             continue
         if len(run) >= 3:
-            found.append(Issue("OCR_NOISE", run[0][0], run[-1][1],
-                               text[run[0][0]:run[-1][1]]))
+            found.append(_run_issue(text, run))
         run = []
     if len(run) >= 3:
-        found.append(Issue("OCR_NOISE", run[0][0], run[-1][1],
-                           text[run[0][0]:run[-1][1]]))
+        found.append(_run_issue(text, run))
     return found
+
+
+def _run_issue(text: str, run: List[Tuple[int, int]]) -> Issue:
+    """Étiqueter une suite de fragments selon son entourage.
+
+    « b et b », « ax b cx d » sont des formules qui ont perdu leurs
+    opérateurs, pas de l'OCR ratée — et le professeur lira le libellé. Si
+    l'entourage immédiat porte des symboles mathématiques, des chiffres ou
+    des lettres de l'alphabet mathématique (𝒃, 𝑥…), c'est FORMULA.
+    """
+
+    start, end = run[0][0], run[-1][1]
+    context = text[max(0, start - 15): end + 15]
+    mathy = any(
+        character in _MATH
+        or character.isdigit()
+        or 0x1D400 <= ord(character) <= 0x1D7FF
+        or character in "=+^"
+        for character in context
+    )
+    return Issue("FORMULA" if mathy else "OCR_NOISE", start, end, text[start:end])
 
 
 def _line_issues(text: str) -> List[Issue]:
@@ -175,6 +194,20 @@ def _formula_issues(text: str) -> List[Issue]:
     return found
 
 
+def _looks_like_heading(text: str) -> bool:
+    """« République du Sénégal » est un intitulé, pas une section tronquée.
+
+    Un intitulé : une seule ligne d'au moins deux mots, qui commence par une
+    capitale et ne se termine par aucune ponctuation. « Suite. » et « Notes : »
+    n'en sont pas — leur ponctuation finale dit qu'il manque la suite.
+    """
+
+    if "\n" in text or text[-1:] in ".:;,!?":
+        return False
+    words = text.split()
+    return len(words) >= 2 and words[0][:1].isupper()
+
+
 def _duplicate_cells(text: str) -> List[Issue]:
     """Cellules longues répétées : un même bloc émis deux fois.
 
@@ -210,7 +243,7 @@ def inspect_section(text: str) -> Tuple[float, List[Issue]]:
     # Une section courte reste examinée : « RÈpublique du SÈnÈgal » fait
     # vingt et un caractères, et dire au professeur qu'elle est « trop
     # courte » lui cache que son vrai défaut est un accent perdu.
-    if len(text.strip()) < _THIN:
+    if len(text.strip()) < _THIN and not _looks_like_heading(text.strip()):
         issues.append(Issue("THIN", 0, len(text), text.strip()[:60]))
     issues.extend(_encoding_issues(text))
     issues.extend(_ocr_issues(text))
@@ -224,5 +257,6 @@ def inspect_section(text: str) -> Tuple[float, List[Issue]]:
     penalty = sum(_WEIGHTS.get(issue.kind, 0.05) for issue in issues) / scale
     confidence = max(0.0, min(1.0, 1.0 - penalty))
 
-    issues.sort(key=lambda issue: issue.start)
+    unique = {(issue.kind, issue.start, issue.end): issue for issue in issues}
+    issues = sorted(unique.values(), key=lambda issue: issue.start)
     return round(confidence, 3), issues

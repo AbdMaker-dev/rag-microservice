@@ -573,25 +573,16 @@ def _repeated_lines(pages: list, threshold: float = 0.04) -> set:
     return {line for line, count in counts.items() if count >= minimum}
 
 
-_DIGIT_RUN = re.compile(r"\d+")
-
-
 def _normalise_digits(line: str) -> str:
     """« page 9 » et « page 12 » sont le même habillage.
 
-    On réduit chaque **suite** de chiffres à un seul marqueur, pas chaque
-    chiffre : remplacer caractère par caractère laisse « 2006 1 » et
-    « 2006 12 » différents, et le pied de page n'est alors jamais reconnu
-    comme répété — chaque page en porte une variante unique.
-
-    Les espaces se normalisent aussi : « Année 200 6 » — l'espace parasite
-    vient de l'extraction — doit rejoindre « Année 2006 ». Chiffres d'abord,
-    puis fusion des marqueurs voisins, puis espaces.
+    Délègue au normaliseur canonique de `columns` : il en existait deux, ils
+    ont divergé, et le pied de page « Année 200 6 71 » a survécu au filtre
+    pendant que les tests locaux passaient. Un seul normaliseur, une seule
+    définition de « même ligne ».
     """
 
-    reduced = _DIGIT_RUN.sub("#", line)
-    reduced = re.sub(r"#(?:\s*#)+", "#", reduced)
-    return re.sub(r"\s+", " ", reduced).strip()
+    return columns.normalised_key(line)
 
 
 def _join_broken_lines(text: str) -> str:

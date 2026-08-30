@@ -153,10 +153,60 @@ def test_une_section_courte_est_examinee_comme_les_autres():
 
     Dire au professeur qu'elle est « trop courte » lui cache que son vrai
     défaut est un accent perdu — et c'est ce défaut-là qu'il doit corriger.
+    C'est d'ailleurs un intitulé : THIN ne s'y déclenche plus, seul le défaut
+    réel reste.
     """
 
     _, issues = inspect_section("RÈpublique du SÈnÈgal")
     kinds = [issue.kind for issue in issues]
 
-    assert "THIN" in kinds
     assert "ENCODING" in kinds
+    assert "THIN" not in kinds
+
+
+def test_un_hachis_en_contexte_mathematique_s_etiquette_formule():
+    """« ax b cx d » : une équation qui a perdu ses opérateurs.
+
+    Le professeur lit le libellé — lui annoncer de l'OCR ratée sur une
+    formule cassée l'enverrait chercher le mauvais problème.
+    """
+
+    _, issues = inspect_section(
+        "Résoudre les équations du type ax b cx d = 0 pour tout x réel donné."
+    )
+    kinds = {issue.kind for issue in issues}
+
+    assert "FORMULA" in kinds
+    assert "OCR_NOISE" not in kinds
+
+
+def test_le_hachis_hors_mathematiques_reste_de_l_ocr():
+    texte = "DECLARATION Mo o x CONSTITUTION DE PERSONNE MORALE ETRANGERE ici même."
+
+    _, issues = inspect_section(texte)
+
+    assert any(issue.kind == "OCR_NOISE" for issue in issues)
+
+
+def test_une_meme_issue_ne_s_emet_qu_une_fois():
+    _, issues = inspect_section("Les élËves et encore les élËves travaillent bien ici.")
+
+    seen = [(issue.kind, issue.start, issue.end) for issue in issues]
+    assert len(seen) == len(set(seen))
+
+
+def test_un_intitule_court_n_est_pas_une_section_tronquee():
+    """« République du Sénégal » est un en-tête légitime.
+
+    « Suite. » et « Notes : », eux, portent une ponctuation finale qui dit
+    qu'il manque la suite : THIN reste.
+    """
+
+    _, entete = inspect_section("République du Sénégal")
+    assert "THIN" not in {issue.kind for issue in entete}
+
+    _, coupe = inspect_section("Suite.")
+    assert "THIN" in {issue.kind for issue in coupe}
+
+    _, notes = inspect_section("Notes :")
+    assert "THIN" in {issue.kind for issue in notes}
