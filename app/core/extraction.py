@@ -24,7 +24,7 @@ from app.core.encoding import RepairPlan, apply_plan, build_plan
 from app.core.pdf_encoding import repair_pdf
 from app.core.pdf_profile import PdfProfile, is_tagged, measure_page
 from app.core.struct_tree import TreeHealth, inspect
-from app.core import columns, tagged_reader
+from app.core import columns, lexicon, tagged_reader
 from app.core.quality import assess
 
 _CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -640,4 +640,9 @@ def clean_ocr_text(text: str) -> str:
             text = "\n".join(kept)
 
     text = _join_broken_lines(text)
+
+    # Recoller les mots que l'extraction a coupés — « théor ème »,
+    # « déc embre » — sur preuve interne : la forme entière existe ailleurs
+    # dans le document. Voir app/core/lexicon.py.
+    text = lexicon.mend(text)
     return normalise(text)
