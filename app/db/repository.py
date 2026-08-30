@@ -205,6 +205,7 @@ class IndexRepository:
         scope: Scope,
         limit: int,
         course_id: Optional[str] = None,
+        role: Optional[str] = None,
         document_ids: Optional[Sequence[str]] = None,
     ) -> List[dict]:
         """Passages les plus proches, dans le périmètre demandé.
@@ -238,14 +239,16 @@ class IndexRepository:
                   AND d.curriculum_version = $5
                   AND d.language = $6
                   AND ($7::text IS NULL OR d.course_id = $7::text)
-                  AND ($8::text[] IS NULL OR d.external_id = ANY($8::text[]))
+                  AND ($8::text IS NULL OR d.role = $8::text)
+                  AND ($9::text[] IS NULL OR d.external_id = ANY($9::text[]))
                 ORDER BY c.embedding <=> $1::vector
-                LIMIT $9
+                LIMIT $10
                 """,
                 to_vector_literal(embedding),
                 scope.country, scope.subject, scope.grade,
                 scope.curriculum_version, scope.language,
                 course_id,
+                role,
                 list(document_ids) if document_ids else None,
                 limit,
             )

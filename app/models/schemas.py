@@ -199,6 +199,10 @@ class SearchRequest(Wire):
     # Restreindre la recherche aux documents d'un cours : c'est le mode de la
     # génération. Absent, on cherche dans tout le périmètre.
     course_id: Optional[str] = None
+    # Restreindre à une nature de document. La génération distingue les deux :
+    # le programme officiel donne le cadre et les compétences exigibles, les
+    # supports du professeur donnent la matière du cours.
+    role: Optional[DocumentRole] = None
     query: str = Field(min_length=1, max_length=4_000)
     limit: int = Field(default=5, ge=1, le=50)
     max_excerpt_characters: int = Field(default=1_200, ge=100, le=10_000)
