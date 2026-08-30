@@ -19,6 +19,7 @@ from app.api.dependencies import require_service_token
 from app.config import Settings, get_settings
 from app.core.generation import CourseGenerator, GeneratedCourse
 from app.models.schemas import (
+    AdjustRequest,
     GenerateAccepted,
     GenerateRequest,
     GenerateStatus,
@@ -86,3 +87,42 @@ async def generation_status(job_id: str, request: Request) -> GenerateStatus:
         queries=course.queries,
         warnings=course.warnings,
     )
+
+
+@router.post(
+    "/generate/adjust",
+    response_model=GenerateAccepted,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def adjust(
+    body: AdjustRequest,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+) -> GenerateAccepted:
+    """Réviser un cours généré, sur consigne du professeur — le « chat ».
+
+    Autant d'allers-retours que nécessaire jusqu'au bon cours final ; chaque
+    appel rend le cours complet révisé, sections intactes comprises.
+    """
+
+    generator = CourseGenerator(
+        llm=request.app.state.llm,
+        retriever=request.app.state.retriever,
+        settings=settings,
+    )
+    job = request.app.state.jobs.submit(
+        lambda: generator.adjust(
+            title=body.title,
+            sections=[section.model_dump() for section in body.sections],
+            request=body.request,
+            instruction=body.instruction,
+            scope=body.scope,
+            course_id=body.course_id,
+            strictness=body.strictness,
+        )
+    )
+    logger.info(
+        "révision lancée",
+        extra={"requestId": body.request_id, "job": job.id},
+    )
+    return GenerateAccepted(request_id=body.request_id, job_id=job.id)

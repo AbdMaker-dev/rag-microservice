@@ -206,6 +206,180 @@ class CourseGenerator:
             title=title, sections=sections, queries=queries, warnings=warnings
         )
 
+
+    async def adjust(
+        self,
+        *,
+        title: str,
+        sections: List[dict],
+        request: str,
+        instruction: str,
+        scope: Scope,
+        course_id: str,
+        strictness: str,
+    ) -> GeneratedCourse:
+        """Réviser un cours existant sur consigne du professeur.
+
+        C'est la conversation : « revois la partie 2, ajoute des exercices,
+        retire l'anecdote »… jusqu'au bon cours final. Le brouillon vit côté
+        plateforme — nous recevons le cours actuel et la consigne, nous
+        rendons le cours révisé, sans état conservé ici.
+
+        Sur CPU, chaque section coûte des minutes : le modèle décide d'abord
+        QUOI toucher, et **les sections non concernées passent telles
+        quelles** — pas une seconde de rédaction gaspillée.
+        """
+
+        queries: List[dict] = []
+        warnings: List[str] = []
+        budget = self._settings.generation_max_queries
+
+        async def search(
+            question: str, nature: Optional[str], from_model: bool
+        ) -> List[Passage]:
+            nonlocal budget
+            if from_model:
+                if budget <= 0:
+                    return []
+                budget -= 1
+            passages = await self._retriever.search(
+                query=question,
+                scope=scope,
+                limit=5,
+                max_excerpt_characters=900,
+                course_id=course_id if nature == "support-cours" else None,
+                role=nature,
+            )
+            queries.append(
+                {
+                    "question": question,
+                    "nature": nature,
+                    "demandeParLeModele": from_model,
+                    "resultats": len(passages),
+                }
+            )
+            return passages
+
+        plan = await self._adjustment_plan(title, sections, request, scope)
+        frame = await search(
+            f"{instruction} — {request}", "programme-officiel", from_model=False
+        )
+
+        by_heading = {section["heading"]: section for section in sections}
+        kept: List[SectionDraft] = []
+        operations = {op["section"]: op for op in plan["operations"]}
+
+        for section in sections:
+            heading = section["heading"]
+            operation = operations.get(heading)
+            if operation is None:
+                # Non concernée par la consigne : conservée mot pour mot.
+                kept.append(
+                    SectionDraft(
+                        heading=heading,
+                        text=section["text"],
+                        citations=list(section.get("citations", [])),
+                        has_additions=_ADDITION in section["text"],
+                    )
+                )
+                continue
+            if operation["action"] == "supprimer":
+                continue
+            kept.append(
+                await self._write_section(
+                    heading=heading,
+                    instruction=(
+                        f"{instruction}\nConsigne de révision : "
+                        f"{operation.get('consigne') or request}\n"
+                        f"Version actuelle de la section :\n{section['text']}"
+                    ),
+                    scope=scope,
+                    strictness=strictness,
+                    frame=frame,
+                    search=search,
+                )
+            )
+
+        for operation in plan["operations"]:
+            if operation["action"] == "ajouter" and operation["section"] not in by_heading:
+                kept.append(
+                    await self._write_section(
+                        heading=operation["section"],
+                        instruction=(
+                            f"{instruction}\nNouvelle section demandée : "
+                            f"{operation.get('consigne') or request}"
+                        ),
+                        scope=scope,
+                        strictness=strictness,
+                        frame=frame,
+                        search=search,
+                    )
+                )
+
+        if strictness == "grounded" and any(s.has_additions for s in kept):
+            warnings.append("ADDITIONS_IN_GROUNDED_MODE")
+
+        return GeneratedCourse(
+            title=str(plan.get("titre") or title),
+            sections=kept,
+            queries=queries,
+            warnings=warnings,
+        )
+
+    async def _adjustment_plan(
+        self, title: str, sections: List[dict], request: str, scope: Scope
+    ) -> dict:
+        """Demander au modèle quoi toucher — et seulement quoi toucher."""
+
+        summary = "\n".join(
+            f"- {section['heading']} ({len(section['text'])} caractères)"
+            for section in sections
+        )
+        raw = await self._chat(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "Un professeur demande une révision de son cours. "
+                        + _context_line(scope)
+                        + " Réponds UNIQUEMENT en JSON : "
+                        '{"titre": "...", "operations": [{"action": '
+                        '"reecrire"|"ajouter"|"supprimer", "section": '
+                        '"<titre de section>", "consigne": "..."}]}. '
+                        "Ne liste QUE les sections réellement concernées par "
+                        "la demande — les autres seront conservées telles "
+                        "quelles."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Cours : {title}\nSections :\n{summary}\n\n"
+                        f"Demande du professeur : {request}"
+                    ),
+                },
+            ]
+        )
+        parsed = _parse_json_block(raw)
+        if not parsed or not isinstance(parsed.get("operations"), list):
+            raise GenerationFailed(
+                "le modèle n'a pas produit de plan de révision exploitable"
+            )
+        operations = []
+        for op in parsed["operations"]:
+            if not isinstance(op, dict):
+                continue
+            action = str(op.get("action", "")).strip()
+            section = str(op.get("section", "")).strip()
+            if action in {"reecrire", "ajouter", "supprimer"} and section:
+                operations.append(
+                    {"action": action, "section": section,
+                     "consigne": str(op.get("consigne", "")).strip()}
+                )
+        if not operations:
+            raise GenerationFailed("la demande de révision ne vise aucune section")
+        return {"titre": parsed.get("titre"), "operations": operations}
+
     # ------------------------------------------------------------------ étapes
 
     async def _plan(

@@ -151,3 +151,64 @@ def test_le_modele_sait_pour_qui_il_ecrit():
         system = exchange[0]["content"]
         assert "seconde" in system and "série S" in system and "SN" in system
         assert "sénégalais" not in system
+
+
+def _course_sections():
+    return [
+        {"heading": "Définition", "text": "La définition originale [S1].",
+         "citations": [{"documentId": "doc-a", "locator": "p. 3"}]},
+        {"heading": "Propriétés", "text": "Les propriétés actuelles [S2]."},
+        {"heading": "Anecdote", "text": "Une longue anecdote."},
+    ]
+
+
+def test_la_revision_ne_touche_que_ce_que_le_prof_demande():
+    """« Revois les propriétés et retire l'anecdote » : la définition ne doit
+    pas bouger d'un caractère — sur CPU, chaque section réécrite coûte des
+    minutes."""
+
+    plan = json.dumps({"operations": [
+        {"action": "reecrire", "section": "Propriétés", "consigne": "plus d'exemples"},
+        {"action": "supprimer", "section": "Anecdote"},
+    ]})
+    llm = ScriptedLlm([plan, "Les propriétés révisées avec exemples [S1]."])
+
+    course = asyncio.run(_generator(llm).adjust(
+        title="Le produit scalaire", sections=_course_sections(),
+        request="revois les propriétés avec des exemples, retire l'anecdote",
+        instruction="cours produit scalaire", scope=SCOPE,
+        course_id="cours-7", strictness="grounded"))
+
+    headings = [s.heading for s in course.sections]
+    assert headings == ["Définition", "Propriétés"]
+    # Conservée mot pour mot, citations comprises.
+    assert course.sections[0].text == "La définition originale [S1]."
+    assert course.sections[0].citations == [{"documentId": "doc-a", "locator": "p. 3"}]
+    assert "révisées" in course.sections[1].text
+
+
+def test_la_revision_peut_ajouter_une_section():
+    plan = json.dumps({"operations": [
+        {"action": "ajouter", "section": "Exercices", "consigne": "trois exercices"},
+    ]})
+    llm = ScriptedLlm([plan, "Exercice 1 fondé sur [S1]."])
+
+    course = asyncio.run(_generator(llm).adjust(
+        title="T", sections=_course_sections(), request="ajoute des exercices",
+        instruction="cours", scope=SCOPE, course_id="c", strictness="grounded"))
+
+    assert [s.heading for s in course.sections][-1] == "Exercices"
+    assert len(course.sections) == 4
+
+
+def test_une_revision_qui_ne_vise_rien_echoue_clairement():
+    llm = ScriptedLlm([json.dumps({"operations": []})])
+
+    try:
+        asyncio.run(_generator(llm).adjust(
+            title="T", sections=_course_sections(), request="euh",
+            instruction="cours", scope=SCOPE, course_id="c", strictness="grounded"))
+    except GenerationFailed as error:
+        assert "révision" in str(error)
+    else:
+        raise AssertionError("un plan de révision vide doit échouer")

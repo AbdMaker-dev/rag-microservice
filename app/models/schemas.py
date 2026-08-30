@@ -246,6 +246,32 @@ class GenerateRequest(Wire):
     strictness: Literal["grounded", "enriched"] = "grounded"
 
 
+class AdjustSection(Wire):
+    heading: str
+    text: str
+    citations: List[Dict[str, Any]] = []
+
+
+class AdjustRequest(Wire):
+    """La conversation : le cours actuel + la consigne du professeur.
+
+    Le brouillon vit côté plateforme ; ce service reste sans état. Les
+    sections non visées par la consigne sont conservées mot pour mot — sur
+    CPU, chaque section réécrite coûte des minutes.
+    """
+
+    request_id: str
+    course_id: str = Field(min_length=1, max_length=255)
+    scope: Scope
+    instruction: str = Field(min_length=3, max_length=4000)
+    strictness: Literal["grounded", "enriched"] = "grounded"
+    title: str = Field(min_length=1, max_length=500)
+    sections: List[AdjustSection] = Field(min_length=1)
+    # Ce que le professeur demande : « revois la partie 2, ajoute des
+    # exercices, retire l'anecdote »…
+    request: str = Field(min_length=3, max_length=4000)
+
+
 class GenerateAccepted(Wire):
     contract_version: Literal["1.0"] = CONTRACT_VERSION
     request_id: str
