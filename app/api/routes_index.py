@@ -35,6 +35,21 @@ async def index(
     request: Request,
     settings: Settings = Depends(get_settings),
 ) -> IndexResponse:
+    # Un support appartient à un cours ; un programme officiel n'appartient à
+    # aucun — il fait référence pour tout le périmètre. Les deux erreurs
+    # inverses sont refusées : un support orphelin serait introuvable à la
+    # génération, un programme rattaché à un cours cesserait d'être commun.
+    if body.role == "support-cours" and not body.course_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "COURSE_ID_REQUIRED_FOR_COURSE_MATERIAL"},
+        )
+    if body.role == "programme-officiel" and body.course_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "OFFICIAL_CURRICULUM_HAS_NO_COURSE"},
+        )
+
     chunks = chunk_document(
         body.text,
         max_tokens=settings.chunk_max_tokens,
@@ -70,6 +85,7 @@ async def index(
     await _repository(request).replace_document(
         external_id=body.document_id,
         course_id=body.course_id,
+        role=body.role,
         title=body.title,
         source_reference=body.source_reference,
         scope=body.scope,

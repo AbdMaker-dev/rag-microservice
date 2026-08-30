@@ -151,6 +151,9 @@ class ExtractResponse(Wire):
 # --------------------------------------------------------------------- indexer
 
 
+DocumentRole = Literal["support-cours", "programme-officiel"]
+
+
 class IndexRequest(Wire):
     request_id: str
     # Identifiant du document côté plateforme. Réindexer le même identifiant
@@ -159,7 +162,12 @@ class IndexRequest(Wire):
     # Le cours auquel ce document appartient, créé côté plateforme AVANT tout
     # dépôt. C'est cette référence qui permettra à la génération de retrouver
     # les documents d'un cours précis, pas seulement ceux d'un périmètre.
-    course_id: str = Field(min_length=1, max_length=255)
+    # Vide UNIQUEMENT pour un programme officiel, qui fait référence pour tout
+    # le périmètre et n'appartient à aucun cours.
+    course_id: str = Field(default="", max_length=255)
+    # La nature du document : support déposé par un professeur dans son cours,
+    # ou programme officiel déposé par un administrateur pour le périmètre.
+    role: DocumentRole = "support-cours"
     title: str = Field(min_length=1, max_length=500)
     source_reference: str = ""
     scope: Scope
@@ -226,6 +234,7 @@ class DocumentSummary(Wire):
 
     document_id: str
     course_id: str = ""
+    role: str = "support-cours"
     title: str
     source_reference: str = ""
     characters: int

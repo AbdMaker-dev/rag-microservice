@@ -312,3 +312,42 @@ def test_le_contrat_d_indexation_porte_le_cours_et_la_hierarchie_du_pays():
     primaire = Scope(country="SN", subject="maths", level="primaire",
                      grade="CM2", curriculum_version="2006")
     assert primaire.track == ""
+
+
+def test_un_support_de_cours_exige_son_cours_et_un_programme_n_en_a_pas():
+    """Les deux erreurs inverses sont refusées.
+
+    Un support sans cours serait introuvable à la génération ; un programme
+    officiel rattaché à un cours cesserait d'être la référence commune du
+    périmètre.
+    """
+
+    import base64
+
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+
+    client = TestClient(create_app())
+    token = {"X-Service-Token": "0" * 40}
+    base = {
+        "requestId": "r-1",
+        "documentId": "doc-1",
+        "title": "Essai",
+        "scope": {
+            "country": "SN", "subject": "maths", "level": "lycee",
+            "track": "S", "grade": "seconde", "curriculumVersion": "2006",
+        },
+        "text": "Le produit scalaire de deux vecteurs du plan.",
+    }
+
+    orphelin = client.post("/index", headers=token, json={**base, "role": "support-cours"})
+    assert orphelin.status_code == 422
+    assert orphelin.json()["detail"]["code"] == "COURSE_ID_REQUIRED_FOR_COURSE_MATERIAL"
+
+    attache = client.post(
+        "/index", headers=token,
+        json={**base, "role": "programme-officiel", "courseId": "cours-7"},
+    )
+    assert attache.status_code == 422
+    assert attache.json()["detail"]["code"] == "OFFICIAL_CURRICULUM_HAS_NO_COURSE"

@@ -36,6 +36,7 @@ class IndexRepository:
         *,
         external_id: str,
         course_id: str,
+        role: str,
         title: str,
         source_reference: str,
         scope: Scope,
@@ -56,15 +57,16 @@ class IndexRepository:
                 document_id = await connection.fetchval(
                     """
                     INSERT INTO documents (
-                        external_id, course_id, title, source_reference,
+                        external_id, course_id, role, title, source_reference,
                         country, subject, level, track, grade,
                         curriculum_version, language,
                         embedding_model, embedding_dimension,
                         content, characters, chunk_count, indexed_at
                     )
-                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16, now())
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17, now())
                     ON CONFLICT (external_id) DO UPDATE SET
                         course_id = EXCLUDED.course_id,
+                        role = EXCLUDED.role,
                         title = EXCLUDED.title,
                         source_reference = EXCLUDED.source_reference,
                         country = EXCLUDED.country,
@@ -82,7 +84,7 @@ class IndexRepository:
                         indexed_at = now()
                     RETURNING id
                     """,
-                    external_id, course_id, title, source_reference,
+                    external_id, course_id, role, title, source_reference,
                     scope.country, scope.subject, scope.level, scope.track,
                     scope.grade, scope.curriculum_version, scope.language,
                     embedding_model, embedding_dimension,
@@ -138,7 +140,7 @@ class IndexRepository:
 
         rows = await self._pool.fetch(
             """
-            SELECT external_id, course_id, title, source_reference, characters,
+            SELECT external_id, course_id, role, title, source_reference, characters,
                    chunk_count, embedding_model, indexed_at
             FROM documents
             WHERE country = $1 AND subject = $2 AND grade = $3
