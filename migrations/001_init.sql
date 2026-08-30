@@ -43,7 +43,11 @@ CREATE TABLE IF NOT EXISTS chunks (
     locator      text NOT NULL,
     content      text NOT NULL,
     token_count  integer NOT NULL,
-    embedding    vector NOT NULL,
+    -- La dimension est celle de bge-m3, notre modèle d'embedding. pgvector
+    -- l'exige pour bâtir l'index HNSW — sans elle, la migration échoue en
+    -- « column does not have dimensions ». Changer de modèle = nouvelle
+    -- migration ; le service vérifie déjà la dimension à chaque indexation.
+    embedding    vector(1024) NOT NULL,
     created_at   timestamptz NOT NULL DEFAULT now(),
 
     CONSTRAINT chunks_document_ordinal_unique UNIQUE (document_id, ordinal)
