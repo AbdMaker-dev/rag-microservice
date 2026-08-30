@@ -64,6 +64,9 @@ class Settings(BaseSettings):
     generation_max_queries: int = Field(default=20, ge=1, le=100)
     generation_max_sections: int = Field(default=8, ge=1, le=20)
     generation_context_tokens: int = Field(default=8_192, ge=2_048, le=32_768)
+    # Plafond de sortie par appel : sans lui, une section peut divaguer sur
+    # des milliers de tokens — des minutes de plus sur CPU, pour du remplissage.
+    generation_output_tokens: int = Field(default=1_200, ge=128, le=8_192)
     inference_max_attempts: int = Field(default=3, ge=1, le=10)
 
     # --- Chunking -----------------------------------------------------------------

@@ -538,8 +538,18 @@ class CourseGenerator:
         )
 
     async def _chat(self, messages: List[dict]) -> str:
+        # Garde-fou de contexte : Ollama tronque SANS PRÉVENIR au-delà de
+        # num_ctx — au pire, le prompt système saute et les règles avec. On
+        # échoue clairement plutôt que de laisser rédiger sans les règles.
+        estimated = sum(len(m["content"]) for m in messages) // 3
+        if estimated > self._settings.generation_context_tokens:
+            raise GenerationFailed(
+                "le contexte de rédaction dépasse la fenêtre du modèle "
+                f"(≈{estimated} tokens) : réduire la demande ou les extraits"
+            )
         return await self._llm.chat(
             messages,
             timeout=self._settings.generation_timeout_s,
             num_ctx=self._settings.generation_context_tokens,
+            num_predict=self._settings.generation_output_tokens,
         )

@@ -26,7 +26,9 @@ class LlmProvider(Protocol):
 
     async def complete(self, system: str, user: str) -> str: ...
 
-    async def chat(self, messages: List[dict], *, timeout: float, num_ctx: int) -> str: ...
+    async def chat(
+        self, messages: List[dict], *, timeout: float, num_ctx: int, num_predict: int
+    ) -> str: ...
 
     async def healthy(self) -> bool: ...
 
@@ -58,7 +60,9 @@ class OllamaLlmProvider:
             raise GenerationError("completion backend returned an empty message")
         return content
 
-    async def chat(self, messages: List[dict], *, timeout: float, num_ctx: int) -> str:
+    async def chat(
+        self, messages: List[dict], *, timeout: float, num_ctx: int, num_predict: int
+    ) -> str:
         """Une conversation complète — c'est elle que la génération utilise.
 
         L'historique porte les extraits déjà fournis et les recherches déjà
@@ -71,7 +75,11 @@ class OllamaLlmProvider:
                 "model": self.model,
                 "stream": False,
                 "messages": messages,
-                "options": {"num_ctx": num_ctx, "temperature": 0.3},
+                "options": {
+                    "num_ctx": num_ctx,
+                    "num_predict": num_predict,
+                    "temperature": 0.3,
+                },
             },
             timeout=timeout,
         )
@@ -97,7 +105,9 @@ class DisabledLlmProvider:
     async def complete(self, system: str, user: str) -> str:
         raise GenerationError("generation is disabled on this deployment")
 
-    async def chat(self, messages: List[dict], *, timeout: float, num_ctx: int) -> str:
+    async def chat(
+        self, messages: List[dict], *, timeout: float, num_ctx: int, num_predict: int
+    ) -> str:
         raise GenerationError("generation is disabled on this deployment")
 
     async def healthy(self) -> bool:
