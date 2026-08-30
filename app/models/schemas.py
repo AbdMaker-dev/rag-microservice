@@ -33,6 +33,13 @@ class Scope(Wire):
 
     country: str
     subject: str
+    # Le cycle, dans les appellations du pays : « primaire », « cem »,
+    # « lycee » au Sénégal. D'autres pays nommeront autrement — le service
+    # stocke, il n'interprète pas.
+    level: str = ""
+    # La série (L, S, S1…). Vide pour le primaire et le CEM, qui n'en ont pas.
+    track: str = ""
+    # La classe : seconde, première, terminale, CM2…
     grade: str
     curriculum_version: str
     language: str = "fr"
@@ -149,6 +156,10 @@ class IndexRequest(Wire):
     # Identifiant du document côté plateforme. Réindexer le même identifiant
     # remplace ses passages : l'appel est donc rejouable sans risque.
     document_id: str = Field(min_length=1, max_length=255)
+    # Le cours auquel ce document appartient, créé côté plateforme AVANT tout
+    # dépôt. C'est cette référence qui permettra à la génération de retrouver
+    # les documents d'un cours précis, pas seulement ceux d'un périmètre.
+    course_id: str = Field(min_length=1, max_length=255)
     title: str = Field(min_length=1, max_length=500)
     source_reference: str = ""
     scope: Scope
@@ -177,6 +188,9 @@ class DeleteResponse(Wire):
 class SearchRequest(Wire):
     request_id: str
     scope: Scope
+    # Restreindre la recherche aux documents d'un cours : c'est le mode de la
+    # génération. Absent, on cherche dans tout le périmètre.
+    course_id: Optional[str] = None
     query: str = Field(min_length=1, max_length=4_000)
     limit: int = Field(default=5, ge=1, le=50)
     max_excerpt_characters: int = Field(default=1_200, ge=100, le=10_000)
@@ -211,6 +225,7 @@ class DocumentSummary(Wire):
     """Ce qu'affiche l'écran de création : un titre, une taille, une date."""
 
     document_id: str
+    course_id: str = ""
     title: str
     source_reference: str = ""
     characters: int

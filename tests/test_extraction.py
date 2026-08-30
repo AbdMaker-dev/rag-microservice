@@ -278,3 +278,37 @@ def test_le_word_97_2003_se_reconnait_a_ses_octets():
     assert is_legacy_doc(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 8)
     assert not is_legacy_doc(b"PK\x03\x04")
     assert not is_legacy_doc(b"%PDF-1.4")
+
+
+def test_le_contrat_d_indexation_porte_le_cours_et_la_hierarchie_du_pays():
+    """Le professeur crée son cours AVANT de déposer des documents.
+
+    Chaque document indexé référence ce cours — c'est ce qui permettra à la
+    génération de retrouver les documents d'UN cours, pas d'un périmètre. Et
+    le périmètre parle la langue du pays : niveau (primaire, CEM, lycée),
+    série quand elle existe, classe.
+    """
+
+    from app.models.schemas import IndexRequest, Scope
+
+    requete = IndexRequest(
+        request_id="r-1",
+        document_id="doc-42",
+        course_id="cours-7",
+        title="Produit scalaire",
+        scope=Scope(
+            country="SN", subject="maths", level="lycee", track="S",
+            grade="seconde", curriculum_version="2006",
+        ),
+        text="Le produit scalaire de deux vecteurs.",
+    )
+
+    rendu = requete.model_dump(by_alias=True)
+    assert rendu["courseId"] == "cours-7"
+    assert rendu["scope"]["level"] == "lycee"
+    assert rendu["scope"]["track"] == "S"
+
+    # Le primaire et le CEM n'ont pas de série : le champ reste simplement vide.
+    primaire = Scope(country="SN", subject="maths", level="primaire",
+                     grade="CM2", curriculum_version="2006")
+    assert primaire.track == ""

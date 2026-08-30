@@ -35,6 +35,7 @@ class IndexRepository:
         self,
         *,
         external_id: str,
+        course_id: str,
         title: str,
         source_reference: str,
         scope: Scope,
@@ -55,17 +56,21 @@ class IndexRepository:
                 document_id = await connection.fetchval(
                     """
                     INSERT INTO documents (
-                        external_id, title, source_reference,
-                        country, subject, grade, curriculum_version, language,
+                        external_id, course_id, title, source_reference,
+                        country, subject, level, track, grade,
+                        curriculum_version, language,
                         embedding_model, embedding_dimension,
                         content, characters, chunk_count, indexed_at
                     )
-                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, now())
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16, now())
                     ON CONFLICT (external_id) DO UPDATE SET
+                        course_id = EXCLUDED.course_id,
                         title = EXCLUDED.title,
                         source_reference = EXCLUDED.source_reference,
                         country = EXCLUDED.country,
                         subject = EXCLUDED.subject,
+                        level = EXCLUDED.level,
+                        track = EXCLUDED.track,
                         grade = EXCLUDED.grade,
                         curriculum_version = EXCLUDED.curriculum_version,
                         language = EXCLUDED.language,
@@ -77,9 +82,9 @@ class IndexRepository:
                         indexed_at = now()
                     RETURNING id
                     """,
-                    external_id, title, source_reference,
-                    scope.country, scope.subject, scope.grade,
-                    scope.curriculum_version, scope.language,
+                    external_id, course_id, title, source_reference,
+                    scope.country, scope.subject, scope.level, scope.track,
+                    scope.grade, scope.curriculum_version, scope.language,
                     embedding_model, embedding_dimension,
                     content, characters, len(chunks),
                 )
@@ -133,7 +138,7 @@ class IndexRepository:
 
         rows = await self._pool.fetch(
             """
-            SELECT external_id, title, source_reference, characters,
+            SELECT external_id, course_id, title, source_reference, characters,
                    chunk_count, embedding_model, indexed_at
             FROM documents
             WHERE country = $1 AND subject = $2 AND grade = $3
@@ -162,9 +167,9 @@ class IndexRepository:
 
         row = await self._pool.fetchrow(
             """
-            SELECT external_id, title, source_reference, content, characters,
-                   chunk_count, embedding_model, indexed_at,
-                   country, subject, grade, curriculum_version, language
+            SELECT external_id, course_id, title, source_reference, content,
+                   characters, chunk_count, embedding_model, indexed_at,
+                   country, subject, level, track, grade, curriculum_version, language
             FROM documents WHERE external_id = $1
             """,
             external_id,
@@ -177,6 +182,7 @@ class IndexRepository:
         embedding: Sequence[float],
         scope: Scope,
         limit: int,
+        course_id: Optional[str] = None,
         document_ids: Optional[Sequence[str]] = None,
     ) -> List[dict]:
         """Passages les plus proches, dans le périmètre demandé.
@@ -184,8 +190,10 @@ class IndexRepository:
         Le filtre de périmètre est appliqué en SQL, avant le tri : le service
         ne cherche jamais en dehors de ce que la plateforme lui a autorisé.
 
-        `document_ids` restreint encore la recherche à certains documents —
-        utile quand un prof génère un cours à partir d'une sélection précise.
+        `course_id` restreint la recherche aux documents d'UN cours : c'est le
+        mode de la génération — le cours d'un professeur se rédige depuis SES
+        documents, pas depuis tout le périmètre. `document_ids` va plus fin
+        encore, pour une sélection à l'intérieur du cours.
         """
 
         return [
@@ -207,13 +215,15 @@ class IndexRepository:
                   AND d.grade = $4
                   AND d.curriculum_version = $5
                   AND d.language = $6
-                  AND ($7::text[] IS NULL OR d.external_id = ANY($7::text[]))
+                  AND ($7::text IS NULL OR d.course_id = $7::text)
+                  AND ($8::text[] IS NULL OR d.external_id = ANY($8::text[]))
                 ORDER BY c.embedding <=> $1::vector
-                LIMIT $8
+                LIMIT $9
                 """,
                 to_vector_literal(embedding),
                 scope.country, scope.subject, scope.grade,
                 scope.curriculum_version, scope.language,
+                course_id,
                 list(document_ids) if document_ids else None,
                 limit,
             )

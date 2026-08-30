@@ -69,6 +69,7 @@ async def index(
 
     await _repository(request).replace_document(
         external_id=body.document_id,
+        course_id=body.course_id,
         title=body.title,
         source_reference=body.source_reference,
         scope=body.scope,

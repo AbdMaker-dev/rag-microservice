@@ -27,6 +27,7 @@ def _repository(request: Request) -> IndexRepository:
 def _summary(row: dict) -> DocumentSummary:
     return DocumentSummary(
         document_id=row["external_id"],
+        course_id=row.get("course_id", ""),
         title=row["title"],
         source_reference=row["source_reference"] or "",
         characters=row["characters"],
