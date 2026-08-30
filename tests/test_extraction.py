@@ -329,7 +329,8 @@ def test_un_support_de_cours_exige_son_cours_et_un_programme_n_en_a_pas():
     from app.main import create_app
 
     client = TestClient(create_app())
-    token = {"X-Service-Token": "0" * 40}
+    # Le secret vient du conftest : le test ne dépend d'aucun environnement.
+    token = {"X-Service-Token": "test-secret-value-of-at-least-32-chars"}
     base = {
         "requestId": "r-1",
         "documentId": "doc-1",
