@@ -352,3 +352,38 @@ def test_un_support_de_cours_exige_son_cours_et_un_programme_n_en_a_pas():
     )
     assert attache.status_code == 422
     assert attache.json()["detail"]["code"] == "OFFICIAL_CURRICULUM_HAS_NO_COURSE"
+
+
+def test_les_embeddings_partent_par_lots():
+    """180 chunks en un appel dépassaient le délai CPU : 503 en production.
+
+    Le lot borne chaque appel ; le délai redevient une garantie par lot.
+    """
+
+    import asyncio
+
+    from app.config import get_settings
+    from app.core.embeddings import OllamaEmbeddingProvider
+
+    calls: list = []
+
+    class _Client:
+        async def post(self, url, json=None, timeout=None):
+            calls.append(len(json["input"]))
+
+            class _Response:
+                def raise_for_status(self):
+                    pass
+
+                def json(self):
+                    return {"embeddings": [[0.0] * 4] * len(json["input"])}
+
+            return _Response()
+
+    settings = get_settings()
+    provider = OllamaEmbeddingProvider(settings, _Client())
+    vectors = asyncio.run(provider.embed([f"chunk {i}" for i in range(37)]))
+
+    assert len(vectors) == 37
+    assert all(size <= settings.embedding_batch_size for size in calls)
+    assert len(calls) >= 3

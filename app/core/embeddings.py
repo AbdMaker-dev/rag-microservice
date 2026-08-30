@@ -25,7 +25,22 @@ class EmbeddingError(RuntimeError):
 class EmbeddingProvider(Protocol):
     model: str
 
-    async def embed(self, texts: Sequence[str]) -> List[List[float]]: ...
+    async def embed(self, texts: Sequence[str]) -> List[List[float]]:
+        """Vectoriser par lots.
+
+        Un document entier envoyé d'un bloc — 180 chunks du programme
+        national — dépassait le délai d'inférence sur CPU et ressortait en
+        503. Le lot borne le coût de chaque appel ; le délai redevient une
+        garantie par lot, pas une loterie par document.
+        """
+
+        vectors: List[List[float]] = []
+        size = max(1, self._settings.embedding_batch_size)
+        for start in range(0, len(texts), size):
+            vectors.extend(await self._embed_batch(texts[start : start + size]))
+        return vectors
+
+    async def _embed_batch(self, texts: Sequence[str]) -> List[List[float]]: ...
 
     async def healthy(self) -> bool: ...
 
@@ -40,6 +55,21 @@ class OllamaEmbeddingProvider:
         self._base_url = settings.ollama_base_url.rstrip("/")
 
     async def embed(self, texts: Sequence[str]) -> List[List[float]]:
+        """Vectoriser par lots.
+
+        Un document entier envoyé d'un bloc — 180 chunks du programme
+        national — dépassait le délai d'inférence sur CPU et ressortait en
+        503. Le lot borne le coût de chaque appel ; le délai redevient une
+        garantie par lot, pas une loterie par document.
+        """
+
+        vectors: List[List[float]] = []
+        size = max(1, self._settings.embedding_batch_size)
+        for start in range(0, len(texts), size):
+            vectors.extend(await self._embed_batch(texts[start : start + size]))
+        return vectors
+
+    async def _embed_batch(self, texts: Sequence[str]) -> List[List[float]]:
         if not texts:
             return []
         payload = {"model": self.model, "input": list(texts)}
@@ -90,6 +120,21 @@ class VllmEmbeddingProvider:
         self._base_url = settings.vllm_base_url.rstrip("/")
 
     async def embed(self, texts: Sequence[str]) -> List[List[float]]:
+        """Vectoriser par lots.
+
+        Un document entier envoyé d'un bloc — 180 chunks du programme
+        national — dépassait le délai d'inférence sur CPU et ressortait en
+        503. Le lot borne le coût de chaque appel ; le délai redevient une
+        garantie par lot, pas une loterie par document.
+        """
+
+        vectors: List[List[float]] = []
+        size = max(1, self._settings.embedding_batch_size)
+        for start in range(0, len(texts), size):
+            vectors.extend(await self._embed_batch(texts[start : start + size]))
+        return vectors
+
+    async def _embed_batch(self, texts: Sequence[str]) -> List[List[float]]:
         if not texts:
             return []
         response = await self._client.post(

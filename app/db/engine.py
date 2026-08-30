@@ -60,6 +60,17 @@ class Database:
         quelques tables. Chaque fichier est enregistré une fois appliqué.
         """
 
+        # Un dossier absent donnait un glob vide : le service démarrait sans
+        # schéma et chaque requête échouait en « relation does not exist ».
+        # C'est arrivé en production — l'image ne copiait pas migrations/.
+        # Un service sans ses migrations ne doit pas démarrer.
+        if not MIGRATIONS_DIRECTORY.is_dir():
+            raise RuntimeError(
+                f"dossier de migrations introuvable : {MIGRATIONS_DIRECTORY}"
+            )
+        if not any(MIGRATIONS_DIRECTORY.glob("*.sql")):
+            raise RuntimeError("aucune migration trouvée : image incomplète")
+
         async with self.pool.acquire() as connection:
             await connection.execute(
                 """

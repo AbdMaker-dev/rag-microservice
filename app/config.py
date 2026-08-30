@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     llm_model: str = "qwen2.5:7b"
     embedding_provider: Literal["ollama", "vllm"] = "ollama"
     embedding_model: str = "bge-m3"
+    # Chunks vectorisés par appel au backend. Mesuré : un document entier
+    # d'un bloc dépasse le délai sur CPU ; par lots, chaque appel reste court.
+    embedding_batch_size: int = Field(default=16, ge=1, le=256)
     ollama_base_url: str = "http://localhost:11434"
     vllm_base_url: Optional[str] = None
     inference_timeout_s: float = Field(default=30.0, ge=1.0, le=300.0)

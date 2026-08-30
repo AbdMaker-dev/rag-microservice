@@ -26,6 +26,7 @@ WORKDIR /app
 
 COPY --from=builder /opt/venv /opt/venv
 COPY --chown=rag:rag app ./app
+COPY --chown=rag:rag migrations ./migrations
 
 USER rag
 EXPOSE 8000
