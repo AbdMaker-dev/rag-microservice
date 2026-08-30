@@ -153,6 +153,26 @@ class IndexRepository:
         )
         return [dict(row) for row in rows]
 
+    async def list_course_documents(self, *, course_id: str) -> List[dict]:
+        """Les documents d'UN cours, pour l'écran de création/édition.
+
+        Un cours est déjà un périmètre : pas besoin de redemander le scope.
+        Un cours porte quelques documents, pas des milliers — pas de
+        pagination.
+        """
+
+        rows = await self._pool.fetch(
+            """
+            SELECT external_id, course_id, role, title, source_reference,
+                   characters, chunk_count, embedding_model, indexed_at
+            FROM documents
+            WHERE course_id = $1
+            ORDER BY indexed_at ASC
+            """,
+            course_id,
+        )
+        return [dict(row) for row in rows]
+
     async def count_documents(self, *, scope: Scope) -> int:
         return await self._pool.fetchval(
             """

@@ -64,6 +64,22 @@ async def list_documents(
     )
 
 
+@router.get("/courses/{course_id}/documents", response_model=DocumentListResponse)
+async def list_course_documents(
+    course_id: str, request: Request
+) -> DocumentListResponse:
+    """Les documents déjà validés d'un cours — l'écran de création les affiche.
+
+    Un cours vide rend une liste vide, pas une erreur : c'est l'état normal
+    d'un cours qui vient d'être créé.
+    """
+
+    rows = await _repository(request).list_course_documents(course_id=course_id)
+    return DocumentListResponse(
+        total=len(rows), documents=[_summary(row) for row in rows]
+    )
+
+
 @router.get("/documents/{document_id}", response_model=DocumentDetail)
 async def get_document(document_id: str, request: Request) -> DocumentDetail:
     row = await _repository(request).get_document(document_id)
