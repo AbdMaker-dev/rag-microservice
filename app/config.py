@@ -54,6 +54,16 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     vllm_base_url: Optional[str] = None
     inference_timeout_s: float = Field(default=30.0, ge=1.0, le=300.0)
+
+    # --- Génération de cours ------------------------------------------------------
+    # Rédiger prend plusieurs minutes sur CPU : le délai est par appel au
+    # modèle, et la génération est asynchrone (tâche + statut).
+    generation_timeout_s: float = Field(default=600.0, ge=30.0, le=3600.0)
+    # L'IA interroge la base autant qu'elle veut — dans cette limite : chaque
+    # aller-retour coûte un appel au modèle, un plafond évite la boucle folle.
+    generation_max_queries: int = Field(default=20, ge=1, le=100)
+    generation_max_sections: int = Field(default=8, ge=1, le=20)
+    generation_context_tokens: int = Field(default=8_192, ge=2_048, le=32_768)
     inference_max_attempts: int = Field(default=3, ge=1, le=10)
 
     # --- Chunking -----------------------------------------------------------------

@@ -230,6 +230,50 @@ class SearchResponse(Wire):
     items: List[SearchItem]
 
 
+# -------------------------------------------------------------------- générer
+
+
+class GenerateRequest(Wire):
+    request_id: str
+    # Le cours dont on rédige le contenu : les recherches du modèle sur les
+    # supports y sont verrouillées.
+    course_id: str = Field(min_length=1, max_length=255)
+    scope: Scope
+    # La note du professeur : ce qu'il veut comme cours.
+    instruction: str = Field(min_length=3, max_length=4000)
+    # grounded : rien hors des extraits, les manques sont signalés.
+    # enriched : le modèle peut compléter, chaque ajout encadré ⟦AJOUT⟧…⟦/AJOUT⟧.
+    strictness: Literal["grounded", "enriched"] = "grounded"
+
+
+class GenerateAccepted(Wire):
+    contract_version: Literal["1.0"] = CONTRACT_VERSION
+    request_id: str
+    job_id: str
+
+
+class GeneratedSection(Wire):
+    heading: str
+    text: str
+    # Les sources réellement citées par la section : documentId + locator,
+    # la page du document d'origine.
+    citations: List[Dict[str, Any]] = []
+    has_additions: bool = False
+
+
+class GenerateStatus(Wire):
+    contract_version: Literal["1.0"] = CONTRACT_VERSION
+    job_id: str
+    status: Literal["running", "done", "failed"]
+    title: Optional[str] = None
+    sections: List[GeneratedSection] = []
+    # Les recherches que l'IA a faites pour construire le cours — on sait
+    # toujours comment un cours a été construit.
+    queries: List[Dict[str, Any]] = []
+    warnings: List[str] = []
+    error: Optional[str] = None
+
+
 # ------------------------------------------------------------------- documents
 
 

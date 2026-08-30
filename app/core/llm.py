@@ -26,6 +26,8 @@ class LlmProvider(Protocol):
 
     async def complete(self, system: str, user: str) -> str: ...
 
+    async def chat(self, messages: List[dict], *, timeout: float, num_ctx: int) -> str: ...
+
     async def healthy(self) -> bool: ...
 
 
@@ -56,6 +58,29 @@ class OllamaLlmProvider:
             raise GenerationError("completion backend returned an empty message")
         return content
 
+    async def chat(self, messages: List[dict], *, timeout: float, num_ctx: int) -> str:
+        """Une conversation complète — c'est elle que la génération utilise.
+
+        L'historique porte les extraits déjà fournis et les recherches déjà
+        faites : le modèle demande la suite en connaissant ce qu'il a reçu.
+        """
+
+        response = await self._client.post(
+            f"{self._base_url}/api/chat",
+            json={
+                "model": self.model,
+                "stream": False,
+                "messages": messages,
+                "options": {"num_ctx": num_ctx, "temperature": 0.3},
+            },
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        content = response.json().get("message", {}).get("content")
+        if not isinstance(content, str) or not content.strip():
+            raise GenerationError("completion backend returned an empty message")
+        return content
+
     async def healthy(self) -> bool:
         try:
             response = await self._client.get(f"{self._base_url}/api/tags", timeout=3.0)
@@ -70,6 +95,9 @@ class DisabledLlmProvider:
     model = "disabled"
 
     async def complete(self, system: str, user: str) -> str:
+        raise GenerationError("generation is disabled on this deployment")
+
+    async def chat(self, messages: List[dict], *, timeout: float, num_ctx: int) -> str:
         raise GenerationError("generation is disabled on this deployment")
 
     async def healthy(self) -> bool:

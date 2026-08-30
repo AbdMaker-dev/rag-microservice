@@ -19,6 +19,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 from app.api import (
+    routes_generate,
     routes_documents,
     routes_extract,
     routes_health,
@@ -29,6 +30,7 @@ from app.config import get_settings
 from app.core.embeddings import build_embedding_provider
 from app.core.logging import configure_logging
 from app.db.engine import Database
+from app.core.jobs import JobStore
 from app.core.retrieval import Retriever
 from app.db.repository import IndexRepository
 
@@ -52,6 +54,7 @@ async def lifespan(app: FastAPI):
     app.state.repository = IndexRepository(database.pool)
     embeddings = build_embedding_provider(settings, client)
     app.state.embeddings = embeddings
+    app.state.jobs = JobStore()
     app.state.retriever = Retriever(
         embeddings=embeddings, repository=app.state.repository
     )
@@ -85,6 +88,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_index.router)
     app.include_router(routes_documents.router)
     app.include_router(routes_search.router)
+    app.include_router(routes_generate.router)
 
     @app.exception_handler(Exception)
     async def unhandled(request, exc):  # noqa: ANN001, ARG001
