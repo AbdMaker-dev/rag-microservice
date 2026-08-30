@@ -234,3 +234,16 @@ def test_les_consignes_precedentes_suivent_la_conversation():
     premier_echange = llm.exchanges[0][1]["content"]
     assert "garde un ton simple" in premier_echange
     assert "pas de jargon" in premier_echange
+
+
+def test_l_application_branche_le_redacteur():
+    """/generate a levé un 500 au premier appel réel : app.state.llm
+    n'existait pas. Le module llm.py existait, rien ne l'instanciait — et les
+    tests exerçaient le générateur en direct, jamais la route dans l'app."""
+
+    import inspect
+
+    from app import main
+
+    source = inspect.getsource(main)
+    assert "app.state.llm = build_llm_provider" in source

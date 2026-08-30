@@ -31,6 +31,7 @@ from app.core.embeddings import build_embedding_provider
 from app.core.logging import configure_logging
 from app.db.engine import Database
 from app.core.jobs import JobStore
+from app.core.llm import build_llm_provider
 from app.core.retrieval import Retriever
 from app.db.repository import IndexRepository
 
@@ -55,6 +56,11 @@ async def lifespan(app: FastAPI):
     embeddings = build_embedding_provider(settings, client)
     app.state.embeddings = embeddings
     app.state.jobs = JobStore()
+    # Le rédacteur de cours. Sans cette ligne, /generate lève un 500 au
+    # premier appel réel — c'est arrivé : le module existait, rien ne
+    # l'instanciait, et les tests exerçaient le générateur sans passer par
+    # l'application.
+    app.state.llm = build_llm_provider(settings, client)
     app.state.retriever = Retriever(
         embeddings=embeddings, repository=app.state.repository
     )
