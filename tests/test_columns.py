@@ -118,3 +118,22 @@ def test_une_page_sans_colonne_reste_de_la_prose():
     rendu = render(lignes, [225.0, 360.0], 600.0, m)
 
     assert "|" not in rendu
+
+
+def test_l_habillage_se_retire_aussi_des_pages_sans_colonnes():
+    """Les neuf pieds de page survivants étaient tous sur des pages en prose.
+
+    Le retour anticipé des pages sans frontières sautait le filtre
+    d'habillage : le détecteur connaissait la famille, mais ne l'appliquait
+    qu'aux pages à colonnes.
+    """
+
+    m = Metrics(line_height=10.0, space_width=2.5, line_gap=12.0)
+    pied = [_word("Programmes", 0, 700), _word("page", 120, 700), _word("12", 180, 700)]
+    contenu = [_word("Introduction", 0, 100), _word("générale", 130, 100)]
+    habillage = furniture([[pied]] * 8)
+
+    rendu = render([contenu, pied], [], 400.0, m, habillage)
+
+    assert "Introduction générale" in rendu
+    assert "Programmes" not in rendu

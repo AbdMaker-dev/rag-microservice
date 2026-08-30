@@ -437,13 +437,16 @@ def render(lines: Sequence[Sequence[dict]], boundaries: Sequence[float],
     if not lines:
         return ""
     block = max((_span(line) for line in lines), default=width) or width
+    known_furniture = known_furniture or set()
+    # L'habillage se retire sur TOUS les chemins. Le retour anticipé des pages
+    # sans colonnes le sautait : les neuf pieds de page survivants étaient
+    # tous sur des pages de titre ou d'introduction — précisément celles qui
+    # sortent en prose.
+    kept = [line for line in lines if not _is_furniture(line, known_furniture)]
     if not boundaries:
-        return "\n".join(" ".join(word["text"] for word in line) for line in lines)
+        return "\n".join(" ".join(word["text"] for word in line) for line in kept)
 
     edges = [0.0] + list(boundaries) + [width]
-    known_furniture = known_furniture or set()
-
-    kept = [line for line in lines if not _is_furniture(line, known_furniture)]
     row_flags = [_is_row(line, edges, metrics) for line in kept]
     first = row_flags.index(True) if True in row_flags else None
     last = len(row_flags) - 1 - row_flags[::-1].index(True) if True in row_flags else None
