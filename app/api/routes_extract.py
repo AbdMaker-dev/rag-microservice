@@ -29,6 +29,7 @@ from app.core.extraction import (
     assemble,
     clean_ocr_text,
     load,
+    is_legacy_doc,
     read_pdf_document,
     sniff,
     to_sections,
@@ -172,6 +173,18 @@ async def extract(
     # le dépôt échoue à cause d'une extension mal devinée ne comprendra pas
     # pourquoi. Cela ferme au passage une porte : un fichier arbitraire annoncé
     # comme PDF n'entre plus dans un analyseur qui ne l'attend pas.
+    # Le Word 97-2003 se reconnaît à ses quatre premiers octets. On ne sait
+    # pas le lire, mais « convertissez en .docx » vaut mieux qu'un « type non
+    # supporté » générique.
+    if is_legacy_doc(payload):
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail={
+                "code": "LEGACY_DOC_FORMAT",
+                "hint": "Document Word 97-2003 : enregistrez-le au format .docx puis renvoyez-le.",
+            },
+        )
+
     media_type = body.media_type
     actual = sniff(payload)
     if actual is not None and actual != media_type:
@@ -187,6 +200,13 @@ async def extract(
             text, plan, analysis, warnings = _extract_pdf(payload, settings)
         else:
             text = load(payload, media_type)
+            # Le contrat ne change pas avec le format : l'interface prof lit
+            # les mêmes clés pour un .docx que pour un PDF. Les champs sans
+            # objet — polices, pages à océriser — restent simplement vides.
+            analysis = DocumentAnalysis(
+                route="docx" if media_type.endswith(".document") else "text",
+                tagged=False,
+            )
     except UnsupportedMediaType as error:
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
@@ -257,8 +277,7 @@ async def extract(
     for section in sections:
         for issue in section.issues:
             summary[issue.kind] = summary.get(issue.kind, 0) + 1
-    if analysis is not None:
-        analysis.issue_summary = summary
+    analysis.issue_summary = summary
     if any(section.confidence < 0.8 for section in sections):
         warnings.append("REVIEW_RECOMMENDED")
 
@@ -274,9 +293,7 @@ async def extract(
             word_plausibility=measured.word_plausibility,
             cid_markers=measured.cid_markers,
             words_repaired=len(plan.words),
-            characters_repaired=sum(
-                font.samples for font in analysis.fonts
-            ) if analysis is not None else 0,
+            characters_repaired=sum(font.samples for font in analysis.fonts),
             unreadable_fonts=plan.unreadable_fonts,
         ),
         analysis=analysis,

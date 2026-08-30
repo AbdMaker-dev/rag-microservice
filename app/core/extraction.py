@@ -56,6 +56,15 @@ _SIGNATURES = (
     (b"PK\x03\x04", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
 )
 
+# Le Word 97-2003 est un conteneur OLE, pas un zip : on ne sait pas le lire,
+# mais on sait le reconnaître — et dire au professeur de convertir en .docx
+# vaut mieux qu'un « type non supporté » générique.
+_LEGACY_DOC = b"\xd0\xcf\x11\xe0"
+
+
+def is_legacy_doc(payload: bytes) -> bool:
+    return payload[:4] == _LEGACY_DOC
+
 
 def sniff(payload: bytes) -> Optional[str]:
     """Le type réel du fichier, lu dans ses premiers octets.
@@ -425,6 +434,26 @@ def load_pdf(payload: bytes, **_ignored) -> str:
     return clean_ocr_text(assemble(read_pdf_document(payload).pages))
 
 
+_DOCX_TEXT_TAGS = (
+    "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t",
+    # Les équations Word vivent dans l'espace de noms OMML, que python-docx
+    # ignore : « Résoudre ax²+bx+c=0 » ressortait « Résoudre  » — une perte
+    # muette, sur une plateforme de mathématiques. On lit les deux espaces
+    # dans l'ordre du document.
+    "{http://schemas.openxmlformats.org/officeDocument/2006/math}t",
+)
+
+
+def _paragraph_text(paragraph) -> str:
+    """Le texte d'un paragraphe, équations comprises."""
+
+    return "".join(
+        node.text or ""
+        for node in paragraph._element.iter()
+        if node.tag in _DOCX_TEXT_TAGS
+    )
+
+
 def load_docx(payload: bytes) -> str:
     try:
         import docx
@@ -434,7 +463,7 @@ def load_docx(payload: bytes) -> str:
     document = docx.Document(io.BytesIO(payload))
     blocks = []
     for paragraph in document.paragraphs:
-        text = paragraph.text.strip()
+        text = _paragraph_text(paragraph).strip()
         if not text:
             continue
         style = (paragraph.style.name or "").lower()

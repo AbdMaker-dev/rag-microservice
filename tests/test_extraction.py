@@ -240,3 +240,41 @@ def test_un_pied_de_page_aux_espaces_parasites_est_quand_meme_reconnu():
     assert _normalise_digits("Seconde  S -  Année 2006 5") == _normalise_digits(
         "Seconde S - Année 2006 71"
     )
+
+
+def test_une_equation_word_ne_se_perd_jamais():
+    """« Résoudre ax²+bx+c=0 » ressortait « Résoudre  » — une perte muette.
+
+    Les équations Word vivent dans l'espace de noms OMML, que python-docx
+    ignore. Sur une plateforme de mathématiques, c'est le pire mode d'échec :
+    le texte a l'air complet.
+    """
+
+    import io
+
+    import docx
+    import docx.oxml
+
+    from app.core.extraction import load_docx
+
+    document = docx.Document()
+    paragraph = document.add_paragraph("Résoudre ")
+    paragraph._element.append(docx.oxml.parse_xml(
+        '<m:oMath xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">'
+        "<m:r><m:t>ax²+bx+c=0</m:t></m:r></m:oMath>"
+    ))
+    document.add_paragraph("pour tout x réel.")
+    buffer = io.BytesIO()
+    document.save(buffer)
+
+    text = load_docx(buffer.getvalue())
+
+    assert "Résoudre ax²+bx+c=0" in text
+
+
+def test_le_word_97_2003_se_reconnait_a_ses_octets():
+    from app.core.extraction import is_legacy_doc
+
+    assert is_legacy_doc(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 8)
+    assert not is_legacy_doc(b"PK\x03\x04")
+    assert not is_legacy_doc(b"%PDF-1.4")
