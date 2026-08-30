@@ -153,3 +153,40 @@ def test_le_repli_sans_filtre_ne_peut_qu_ajouter_de_la_prudence():
 
     assert part >= 0.3
     assert "cyrillic" in _SCRIPTS and "arabic" in _SCRIPTS and "cjk" in _SCRIPTS
+
+
+def test_une_petite_police_ne_decide_jamais_seule():
+    """« République du Sénégal » est devenu « RÈpublique du SÈnÈgal ».
+
+    Dans un document Word sain, deux polices de 24 et 12 caractères non-ASCII
+    ont basculé en mac_roman sur la foi d'un en-tête en majuscules
+    accentuées : nous avons corrompu un document correct. Un petit échantillon
+    plausible dans plusieurs tables tranche sur du bruit.
+    """
+
+    # Un en-tête accentué : « é » cp1252, plausible en mac_roman aussi.
+    tahoma = Counter({0xE9: 14, 0xE8: 6, 0xE0: 4, 0x41: 200})
+
+    seule = decide({"ABCDEE+Tahoma": tahoma}, {})
+
+    assert seule[0].encoding is None, "24 caractères ne suffisent pas à décider seul"
+
+
+def test_une_petite_police_peut_suivre_le_consensus_du_document():
+    """Le programme national répare à raison des polices de 9 et 12 caractères.
+
+    Elles suivent des polices sœurs de plusieurs centaines de caractères,
+    toutes diagnostiquées mac_roman. Un plancher plat les aurait tuées ; le
+    consensus les garde tout en bloquant les petites polices isolées.
+    """
+
+    grosse = Counter({0x8E: 400, 0x8F: 60, 0xC9: 480, 0xA5: 70, 0x41: 900})
+    petite = Counter({0x8E: 7, 0xC9: 4, 0x41: 30})
+
+    ensemble = decide({"ENNLHC+Times": grosse, "BOKLEN+Times-Bold": petite}, {})
+    isolee = decide({"BOKLEN+Times-Bold": petite}, {})
+
+    par_nom = {d.fontname: d for d in ensemble}
+    assert par_nom["ENNLHC+Times"].encoding == "mac_roman"
+    assert par_nom["BOKLEN+Times-Bold"].encoding == "mac_roman", "elle suit le consensus"
+    assert isolee[0].encoding is None, "sans consensus, elle s'abstient"

@@ -85,6 +85,18 @@ _NEUTRAL |= set("•…‘’“”«»°±×÷§©®")
 
 # Sous ce nombre de caractères non-ASCII, une police ne dit rien de fiable.
 _MINIMUM_SAMPLE = 8
+# En dessous, une police ne décide jamais SEULE : elle ne peut que suivre un
+# consensus établi par des polices bien échantillonnées du même document.
+#
+# La preuve par les deux cas réels. Dans un document Word sain, deux Tahoma de
+# 24 et 12 caractères non-ASCII ont basculé en mac_roman sur la foi d'un
+# en-tête en majuscules accentuées — et « République du Sénégal » est devenu
+# « RÈpublique du SÈnÈgal » : nous avons corrompu un document correct. Dans le
+# programme national, des polices de 9, 12 et 13 caractères ont été réparées à
+# raison — mais elles suivaient trois polices sœurs de 1 227, 530 et 245
+# caractères, toutes diagnostiquées mac_roman. Un plancher plat les aurait
+# tuées ; le consensus les garde et bloque les Tahoma.
+_SOLO_SAMPLE = 100
 # On n'écarte la table déclarée que si le gain est net...
 _MINIMUM_GAIN = 0.15
 # ...et si la deuxième hypothèse est nettement derrière.
@@ -364,6 +376,37 @@ def decide(
             for name in counts
         ]
 
+    def _verdict(codes: Counter) -> Optional[Tuple[str, float]]:
+        """La table qui l'emporte au score, ou None si rien ne se détache."""
+
+        declared_name = "cp1252"
+        base = _score(codes, declared_name)
+        ranked = sorted(
+            ((_score(codes, name), name) for name in _TEXT_ENCODINGS),
+            reverse=True,
+        )
+        best_score, best_name = ranked[0]
+        runner_up = ranked[1][0] if len(ranked) > 1 else -1.0
+        gain = best_score - base
+        if best_name != declared_name and gain >= _MINIMUM_GAIN and (
+            best_score - runner_up
+        ) >= _MINIMUM_MARGIN:
+            return best_name, round(min(gain, 1.0), 3)
+        return None
+
+    # Première passe : seules les polices bien échantillonnées décident. Le
+    # consensus du document, c'est l'ensemble des tables qu'elles ont élues.
+    verdicts: Dict[str, Optional[Tuple[str, float]]] = {}
+    consensus: set = set()
+    for fontname, codes in counts.items():
+        samples = sum(count for code, count in codes.items() if 0x7F < code <= 0xFF)
+        if fontname in trusted or samples < _MINIMUM_SAMPLE or is_symbolic(fontname):
+            continue
+        verdict = _verdict(codes)
+        verdicts[fontname] = verdict
+        if verdict and samples >= _SOLO_SAMPLE:
+            consensus.add(verdict[0])
+
     for fontname, codes in counts.items():
         samples = sum(count for code, count in codes.items() if 0x7F < code <= 0xFF)
 
@@ -382,23 +425,14 @@ def decide(
             )
             continue
 
-        declared = current.get(fontname, "cp1252")
-        base = _score(codes, declared)
-        ranked = sorted(
-            ((_score(codes, name), name) for name in _TEXT_ENCODINGS),
-            reverse=True,
+        verdict = verdicts.get(fontname)
+        allowed = verdict is not None and (
+            samples >= _SOLO_SAMPLE or verdict[0] in consensus
         )
-        best_score, best_name = ranked[0]
-        runner_up = ranked[1][0] if len(ranked) > 1 else -1.0
-
-        gain = best_score - base
-        margin = best_score - runner_up
-        if best_name != declared and gain >= _MINIMUM_GAIN and margin >= _MINIMUM_MARGIN:
-            decisions.append(
-                FontDecision(fontname, best_name, round(min(gain, 1.0), 3), samples)
-            )
+        if allowed:
+            decisions.append(FontDecision(fontname, verdict[0], verdict[1], samples))
         else:
-            decisions.append(FontDecision(fontname, None, round(gain, 3), samples))
+            decisions.append(FontDecision(fontname, None, 0.0, samples))
     return decisions
 
 
