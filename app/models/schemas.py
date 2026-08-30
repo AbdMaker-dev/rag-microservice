@@ -90,9 +90,14 @@ class ExtractionQuality(Wire):
     score: float
     word_plausibility: float
     cid_markers: int
-    # Nombre de mots dont l'encodage a été rétabli, et polices qu'aucune table
-    # connue n'a rendues lisibles : le prof sait alors où porter son attention.
+    # Ce que la passe de rattrapage mot à mot a corrigé. La correction des
+    # polices, elle, se mesure dans charactersRepaired : un compteur qui
+    # restait à zéro pendant que neuf polices étaient réécrites n'était pas un
+    # compteur.
     words_repaired: int = 0
+    # Caractères non-ASCII dont la table a été rétablie par la réécriture des
+    # polices — borne basse, comptée sur les pages échantillonnées.
+    characters_repaired: int = 0
     unreadable_fonts: List[str] = []
 
 
@@ -115,6 +120,9 @@ class DocumentAnalysis(Wire):
 
     route: str = "untagged"
     tagged: bool = False
+    # Le décompte des passages douteux par type, toutes sections confondues —
+    # pour l'appelant qui ne lit pas sections[].
+    issue_summary: Dict[str, int] = {}
     text_coverage: float = 0.0
     pages_needing_ocr: List[int] = []
     fonts: List[FontDiagnosis] = []

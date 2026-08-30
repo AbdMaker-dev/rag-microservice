@@ -81,19 +81,27 @@ def test_une_ligne_pleine_largeur_reste_de_la_prose():
 
 
 def test_un_mot_au_bord_reste_dans_sa_colonne():
-    """L'affectation se fait par recouvrement, jamais par le centre du mot."""
+    """L'affectation se fait par recouvrement, jamais par le centre du mot.
+
+    Une formule qui déborde de sa cellule — cas fréquent en mathématiques —
+    n'est pas une ligne cellulaire au sens strict ; elle rejoint la ligne de
+    tableau en cours, et son mot débordant reste dans la colonne qu'il couvre
+    le plus.
+    """
 
     m = Metrics(line_height=10.0, space_width=2.5, line_gap=12.0)
     lignes = [
-        # Une ligne large, qui donne sa mesure au bloc de texte.
-        [_word("titre", 0, 80, width=380)],
-        # Le mot déborde la frontière, mais l'essentiel est à gauche.
-        [_word("gauche", 150, 100, width=60), _word("droite", 260, 100)],
+        [_word("gauche", 100, 100, width=60), _word("droite", 260, 100)],
+        # Le mot déborde la frontière (150–210), l'essentiel est à gauche.
+        [_word("formule", 150, 108, width=60), _word("suite", 260, 108)],
+        [_word("bas", 100, 116, width=60), _word("fin", 260, 116)],
     ]
 
     rendu = render(lignes, [205.0], 400.0, m)
 
-    assert "| gauche | droite |" in rendu
+    ligne_tableau = next(l for l in rendu.split("\n") if "formule" in l)
+    assert ligne_tableau.index("formule") < ligne_tableau.index("|", 2), \
+        "le mot débordant reste dans la colonne de gauche"
 
 
 def test_une_page_sans_colonne_reste_de_la_prose():

@@ -252,18 +252,31 @@ async def extract(
         },
     )
 
+    sections = [_describe(section) for section in to_sections(text)]
+    summary: dict = {}
+    for section in sections:
+        for issue in section.issues:
+            summary[issue.kind] = summary.get(issue.kind, 0) + 1
+    if analysis is not None:
+        analysis.issue_summary = summary
+    if any(section.confidence < 0.8 for section in sections):
+        warnings.append("REVIEW_RECOMMENDED")
+
     return ExtractResponse(
         request_id=body.request_id,
         filename=body.filename,
         media_type=media_type,
         text=text,
         characters=len(text),
-        sections=[_describe(section) for section in to_sections(text)],
+        sections=sections,
         quality=ExtractionQuality(
             score=measured.score,
             word_plausibility=measured.word_plausibility,
             cid_markers=measured.cid_markers,
             words_repaired=len(plan.words),
+            characters_repaired=sum(
+                font.samples for font in analysis.fonts
+            ) if analysis is not None else 0,
             unreadable_fonts=plan.unreadable_fonts,
         ),
         analysis=analysis,

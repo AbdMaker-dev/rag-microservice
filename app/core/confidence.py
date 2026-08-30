@@ -71,6 +71,7 @@ _WEIGHTS = {
     "UNREADABLE": 0.10,
     "OCR_NOISE": 0.08,
     "THIN": 0.30,
+    "DUPLICATE_CELL": 0.15,   # double poids à l'indexation
 }
 
 
@@ -174,6 +175,34 @@ def _formula_issues(text: str) -> List[Issue]:
     return found
 
 
+def _duplicate_cells(text: str) -> List[Issue]:
+    """Cellules longues répétées : un même bloc émis deux fois.
+
+    Filet derrière la déduplication du lecteur d'arbre — il signale ce qu'elle
+    aurait manqué, notamment sur la voie géométrique qui n'en a pas.
+    """
+
+    found: List[Issue] = []
+    seen: dict = {}
+    offset = 0
+    for line in text.split("\n"):
+        if line.startswith("|"):
+            position = offset
+            for cell in line.split("|"):
+                stripped = cell.strip()
+                if len(stripped) >= 40:
+                    if stripped in seen:
+                        start = offset + line.find(stripped)
+                        found.append(
+                            Issue("DUPLICATE_CELL", start, start + len(stripped),
+                                  stripped[:80])
+                        )
+                    else:
+                        seen[stripped] = position
+        offset += len(line) + 1
+    return found
+
+
 def inspect_section(text: str) -> Tuple[float, List[Issue]]:
     """Noter une section et situer ce qui y pose question."""
 
@@ -187,6 +216,7 @@ def inspect_section(text: str) -> Tuple[float, List[Issue]]:
     issues.extend(_ocr_issues(text))
     issues.extend(_line_issues(text))
     issues.extend(_formula_issues(text))
+    issues.extend(_duplicate_cells(text))
 
     # La pénalité est rapportée à la longueur : deux défauts sur trois lignes
     # sont graves, les mêmes sur trois pages ne le sont pas.

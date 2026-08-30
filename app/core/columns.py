@@ -265,21 +265,189 @@ def _is_furniture(line: Sequence[dict], known: set) -> bool:
     return _DIGIT_RUN.sub("#", text) in known
 
 
+def _straddlers(line: Sequence[dict], boundaries: Sequence[float], slack: float) -> int:
+    """Mots à cheval sur une frontière, débordant nettement des deux côtés."""
+
+    count = 0
+    for word in line:
+        for boundary in boundaries:
+            if word["x0"] < boundary - slack and word["x1"] > boundary + slack:
+                count += 1
+                break
+    return count
+
+
+def confirms(lines: Sequence[Sequence[dict]], boundaries: Sequence[float],
+             width: float, metrics: Metrics) -> bool:
+    """La page confirme-t-elle des frontières qu'on lui propose ?
+
+    Le gabarit du document ne s'impose jamais : il se propose. Une page de
+    prose justifiée le rejette — ses lignes chevauchent les frontières de part
+    en part ; une page de tableau qui a raté sa détection locale le confirme.
+    """
+
+    if not boundaries or not lines:
+        return False
+    block = max((_span(line) for line in lines), default=width) or width
+    slack = metrics.space_width * 2
+    clean = 0
+    narrow = 0
+    for line in lines:
+        if _span(line) >= block * 0.85:
+            continue
+        narrow += 1
+        cells = {_column_of(word, [0.0, *boundaries, width]) for word in line}
+        if len(cells) >= 2 and _straddlers(line, boundaries, slack) == 0:
+            clean += 1
+    return narrow > 0 and clean >= max(3, int(narrow * 0.25))
+
+
+def clustered_boundaries(lines: Sequence[Sequence[dict]], width: float,
+                         metrics: Metrics) -> List[float]:
+    """Frontières de colonnes par le vote des débuts de colonnes.
+
+    Voie de secours derrière `gutters` : l'histogramme échoue quand la page
+    mêle prose et tableau, ou quand des cellules fusionnées traversent la
+    gouttière. Ici chaque grand blanc interne vote — par son **bord droit**,
+    le début de la colonne suivante. Le centre trompe : quand une cellule est
+    vide, le blanc court de la colonne 0 à la colonne 2 et son centre tombe au
+    milieu de la colonne 1. Le début de colonne, aligné à gauche, reste stable
+    quelles que soient les cellules remplies.
+    """
+
+    narrow = [line for line in lines if _span(line) < width * 0.85]
+    if len(narrow) < 3:
+        return []
+
+    threshold = metrics.gutter_min * 2
+    starts = sorted(
+        right["x0"]
+        for line in narrow
+        for left, right in zip(line, line[1:])
+        if right["x0"] - left["x1"] >= threshold
+    )
+    if not starts:
+        return []
+    clusters: List[List[float]] = [[starts[0]]]
+    for x in starts[1:]:
+        if x - clusters[-1][-1] <= metrics.gutter_merge * 2:
+            clusters[-1].append(x)
+        else:
+            clusters.append([x])
+    candidates = [
+        median(cluster) - metrics.gutter_min / 2
+        for cluster in clusters
+        if len(cluster) >= 2
+    ]
+    if not candidates:
+        return []
+
+    # Les lignes qui chevauchent un candidat sont prose ou cellule fusionnée :
+    # elles seront rendues en prose, elles ne votent pas contre.
+    slack = metrics.space_width * 2
+    plain = [
+        line
+        for line in narrow
+        if not any(
+            word["x0"] < x - slack and word["x1"] > x + slack
+            for word in line
+            for x in candidates
+        )
+    ]
+    if len(plain) < 3:
+        return []
+
+    usage: Dict[float, int] = {}
+    for x in candidates:
+        used = sum(
+            1
+            for line in plain
+            if any(word["x1"] <= x for word in line)
+            and any(word["x0"] >= x for word in line)
+        )
+        if used >= max(3, int(len(plain) * 0.12)):
+            usage[x] = used
+
+    # Deux frontières plus proches que la largeur minimale d'une colonne
+    # décrivent le même bord ou un alignement interne : la moins utilisée
+    # disparaît.
+    kept = sorted(usage)
+    minimum_column = width * 0.15
+    changed = True
+    while changed and len(kept) > 1:
+        changed = False
+        for index in range(len(kept) - 1):
+            if kept[index + 1] - kept[index] < minimum_column:
+                loser = (
+                    kept[index]
+                    if usage[kept[index]] <= usage[kept[index + 1]]
+                    else kept[index + 1]
+                )
+                kept.remove(loser)
+                changed = True
+                break
+    return kept
+
+
+def _is_row(line: Sequence[dict], edges: Sequence[float], metrics: Metrics) -> bool:
+    """Une ligne strictement cellulaire : ses mots tombent dans les colonnes.
+
+    Deux exigences. Ses mots occupent au moins deux cellules, et chaque
+    frontière franchie l'est par un vrai blanc — le dernier mot avant et le
+    premier après laissent la largeur d'une gouttière. « la résolution de
+    problèmes » n'y répond pas : son texte est continu à travers la frontière.
+    """
+
+    cells = sorted({_column_of(word, edges) for word in line})
+    if len(cells) < 2:
+        return False
+    boundaries = list(edges[1:-1])
+    for word in line:
+        for boundary in boundaries:
+            if word["x0"] < boundary and word["x1"] > boundary:
+                return False
+    for left_cell, right_cell in zip(cells, cells[1:]):
+        boundary = edges[left_cell + 1]
+        before = max(
+            (word["x1"] for word in line if word["x1"] <= boundary), default=None
+        )
+        after = min(
+            (word["x0"] for word in line if word["x0"] >= boundary), default=None
+        )
+        if before is None or after is None:
+            continue
+        if after - before < metrics.gutter_min:
+            return False
+    return True
+
+
 def render(lines: Sequence[Sequence[dict]], boundaries: Sequence[float],
            width: float, metrics: Metrics, known_furniture: Optional[set] = None) -> str:
-    """Rendre une page : les lignes pleine largeur en prose, le reste en cellules."""
+    """Rendre une page : prose et tableau chacun à sa place.
+
+    La zone tabulaire va de la première à la dernière ligne strictement
+    cellulaire — c'est le zonage par bandes. En dehors, tout est prose, même
+    étroit : sans cette règle, les puces d'une page mixte ressortaient hachées
+    en fausses cellules — « | la résolution | de problèmes | plane | ». À
+    l'intérieur, une ligne non cellulaire — une formule qui déborde, une
+    cellule fusionnée — rejoint la ligne de tableau en cours au lieu d'en
+    ouvrir une fausse.
+    """
 
     if not lines:
         return ""
-    # « Pleine largeur » se mesure au bloc de texte, pas à la feuille : un
-    # paragraphe justifié s'arrête aux marges et n'atteint jamais le bord.
-    # Mesuré à la page, la préface du programme national passait pour un
-    # tableau et ses phrases se retrouvaient entrelacées sur trois colonnes.
     block = max((_span(line) for line in lines), default=width) or width
     if not boundaries:
         return "\n".join(" ".join(word["text"] for word in line) for line in lines)
 
     edges = [0.0] + list(boundaries) + [width]
+    known_furniture = known_furniture or set()
+
+    kept = [line for line in lines if not _is_furniture(line, known_furniture)]
+    row_flags = [_is_row(line, edges, metrics) for line in kept]
+    first = row_flags.index(True) if True in row_flags else None
+    last = len(row_flags) - 1 - row_flags[::-1].index(True) if True in row_flags else None
+
     out: List[str] = []
     buffer: List[List[List[str]]] = []
 
@@ -289,29 +457,28 @@ def render(lines: Sequence[Sequence[dict]], boundaries: Sequence[float],
                 out.append("| " + " | ".join(" ".join(cell) for cell in row) + " |")
         buffer.clear()
 
-    known_furniture = known_furniture or set()
     previous_bottom: Optional[float] = None
-    for line in lines:
-        # L'habillage est rendu en prose, jamais haché en cellules : découpé,
-        # il deviendrait une ligne de tableau impossible à reconnaître ensuite.
-        if _is_furniture(line, known_furniture):
-            flush()
-            out.append(" ".join(word["text"] for word in line))
-            previous_bottom = max(word["bottom"] for word in line)
-            continue
-        # Une ligne qui traverse toute la page est de la prose, pas une ligne
-        # de tableau : la découper aux frontières la hacherait.
-        if _span(line) >= block * 0.85:
+    for index, line in enumerate(kept):
+        in_zone = first is not None and first <= index <= last
+        top = min(word["top"] for word in line)
+        wide = _span(line) >= block * 0.85
+
+        if not in_zone or (wide and not row_flags[index]):
             flush()
             out.append(" ".join(word["text"] for word in line))
             previous_bottom = max(word["bottom"] for word in line)
             continue
 
-        top = min(word["top"] for word in line)
-        if previous_bottom is not None and top - previous_bottom > metrics.row_break:
-            flush()
-        if not buffer:
-            buffer.append([[] for _ in range(len(edges) - 1)])
+        if row_flags[index]:
+            if previous_bottom is not None and top - previous_bottom > metrics.row_break:
+                flush()
+            if not buffer:
+                buffer.append([[] for _ in range(len(edges) - 1)])
+        elif not buffer:
+            # Ligne non cellulaire en tête de zone : prose à sa place.
+            out.append(" ".join(word["text"] for word in line))
+            previous_bottom = max(word["bottom"] for word in line)
+            continue
 
         for word in line:
             buffer[-1][_column_of(word, edges)].append(word["text"])

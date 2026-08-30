@@ -202,6 +202,8 @@ def _render_table(node, page, numbers, texts) -> Tuple[str, Optional[int]]:
     rows: List[str] = []
     where: Optional[int] = None
 
+    emitted: Set[Tuple[int, int]] = set()
+
     def walk_rows(current, seen: Set[int]) -> None:
         nonlocal where
         try:
@@ -218,11 +220,27 @@ def _render_table(node, page, numbers, texts) -> Tuple[str, Optional[int]]:
         if not hasattr(resolved, "get"):
             return
         if str(resolved.get("/S", "")).lstrip("/") == _ROW:
-            cells = _render_row(resolved, page, numbers, texts)
+            cells = _render_row(resolved, page, numbers, texts, emitted)
             if cells:
                 if where is None:
                     where = cells[1]
-                rows.append("| " + " | ".join(cells[0]) + " |")
+                # Les MCID ne suffisent pas : sur un document Word réel, une
+                # cellule fusionnée est écrite DEUX FOIS dans le flux, avec
+                # des MCID distincts. On ne supprime que le cas sûr — la même
+                # cellule longue répétée DANS LA MÊME LIGNE : une ligne ne
+                # répète jamais légitimement quarante caractères identiques.
+                # D'une ligne à l'autre, une compétence peut revenir à bon
+                # droit ; là, le détecteur signale au lieu de supprimer.
+                in_row: Set[str] = set()
+                deduped = []
+                for cell in cells[0]:
+                    if len(cell) >= 40 and cell in in_row:
+                        deduped.append("")
+                        continue
+                    if len(cell) >= 40:
+                        in_row.add(cell)
+                    deduped.append(cell)
+                rows.append("| " + " | ".join(deduped) + " |")
             return
         children = resolved.get("/K")
         if children is None:
@@ -235,7 +253,9 @@ def _render_table(node, page, numbers, texts) -> Tuple[str, Optional[int]]:
     return ("\n".join(rows), where) if rows else ("", None)
 
 
-def _render_row(row, page, numbers, texts) -> Optional[Tuple[List[str], int]]:
+def _render_row(row, page, numbers, texts,
+                emitted: Optional[Set[Tuple[int, int]]] = None) -> Optional[Tuple[List[str], int]]:
+    emitted = emitted if emitted is not None else set()
     cells: List[str] = []
     first_page: Optional[int] = None
     children = row.get("/K")
@@ -251,8 +271,16 @@ def _render_row(row, page, numbers, texts) -> Optional[Tuple[List[str], int]]:
         marks = _marks_of(target, page, numbers, set())
         if marks and first_page is None:
             first_page = marks[0][0]
+        # Une cellule fusionnée — RowSpan, ColSpan — est référencée par
+        # plusieurs TD qui pointent les mêmes contenus marqués. Sans ce
+        # registre, son texte était émis à chaque référence : dix blocs
+        # d'objectifs pédagogiques doublés sur un document réel, soit un
+        # double poids à l'indexation. Le premier passage émet, les suivants
+        # laissent la cellule vide.
+        fresh = [mark for mark in marks if mark not in emitted]
+        emitted.update(fresh)
         cells.append(
-            " ".join(texts[mark] for mark in marks if mark in texts).strip()
+            " ".join(texts[mark] for mark in fresh if mark in texts).strip()
         )
     return (cells, first_page or page or 1) if cells else None
 

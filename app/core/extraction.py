@@ -191,6 +191,27 @@ class PdfReading:
     read_by_tree: bool = False
 
 
+def _boundaries_for(page_lines, found, fallback, width, metrics) -> List[float]:
+    """Les frontières de colonnes d'une page.
+
+    Les siennes d'abord. À défaut, le gabarit du document — mais il se
+    propose, il ne s'impose pas : la page doit le confirmer, sinon la préface
+    en prose ressortirait déchiquetée sur les colonnes des tableaux voisins.
+    """
+
+    if found:
+        return [(left + right) / 2 for left, right in found]
+    # L'histogramme n'a rien vu : le regroupement des blancs internes prend le
+    # relais — il réussit les pages mixtes prose-tableau où l'histogramme est
+    # aveugle, et inversement. Union des deux, l'existant en premier.
+    clustered = columns.clustered_boundaries(page_lines, width, metrics)
+    if clustered:
+        return clustered
+    if fallback and columns.confirms(page_lines, fallback, width, metrics):
+        return fallback
+    return []
+
+
 def _read_columns(pages_words: List[list], widths: List[float]) -> List[str]:
     """Rendre le document en suivant ses gouttières de blanc."""
 
@@ -205,11 +226,7 @@ def _read_columns(pages_words: List[list], widths: List[float]) -> List[str]:
     return [
         columns.render(
             page_lines,
-            # Le gabarit ne secourt qu'une page qui a vu des colonnes sans les
-            # voir toutes. Une page qui n'en voit aucune est de la prose.
-            [(left + right) / 2 for left, right in found]
-            if len(found) >= len(fallback) or not found
-            else fallback,
+            _boundaries_for(page_lines, found, fallback, width, metrics),
             width,
             metrics,
             known,
@@ -341,7 +358,12 @@ def read_pdf_document(payload: bytes, repair: bool = True) -> PdfReading:
             try:
                 pages = _read_columns(pages_words, widths)
             except Exception:  # noqa: BLE001
-                logger.warning("lecture par colonnes impossible, filets conservés")
+                # Ce filet a déjà masqué une AttributeError pendant des heures :
+                # toutes les mesures reflétaient find_tables pendant que la
+                # lecture par colonnes plantait en silence. L'exception reste
+                # rattrapée — un document ne doit pas échouer pour ça — mais
+                # elle est bruyante.
+                logger.exception("lecture par colonnes impossible, filets conservés")
 
     described = PdfProfile(
         pages=len(coverages),
