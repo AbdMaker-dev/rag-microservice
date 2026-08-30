@@ -61,6 +61,20 @@ class SectionDraft:
 
 
 @dataclass(frozen=True)
+class PlanSectionDraft:
+    heading: str
+    resume: str
+
+
+@dataclass(frozen=True)
+class PlanDraft:
+    title: str
+    sections: List[PlanSectionDraft]
+    queries: List[dict]
+    warnings: List[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class GeneratedCourse:
     title: str
     sections: List[SectionDraft]
@@ -392,6 +406,191 @@ class CourseGenerator:
         if not operations:
             raise GenerationFailed("la demande de révision ne vise aucune section")
         return {"titre": parsed.get("titre"), "operations": operations}
+
+
+    # ------------------------------------------------------- mode progressif
+
+    async def draft_plan(
+        self,
+        *,
+        instruction: str,
+        scope: Scope,
+        course_id: str,
+        current_plan: Optional[dict] = None,
+        request: Optional[str] = None,
+        history: Optional[List[dict]] = None,
+    ) -> PlanDraft:
+        """Proposer — ou réviser — le plan du cours, sans rédiger une ligne.
+
+        C'est la première étape du mode progressif : le professeur discute le
+        plan avec l'IA et le valide AVANT que le moindre contenu ne soit
+        payé. Une erreur corrigée ici coûte trente secondes ; la même erreur
+        découverte après rédaction coûte cinq sections à refaire.
+        """
+
+        queries: List[dict] = []
+        warnings: List[str] = []
+
+        frame = await self._retriever.search(
+            query=instruction,
+            scope=scope,
+            limit=5,
+            max_excerpt_characters=900,
+            role="programme-officiel",
+        )
+        queries.append(
+            {"question": instruction, "nature": "programme-officiel",
+             "demandeParLeModele": False, "resultats": len(frame)}
+        )
+        if not frame:
+            warnings.append("NO_OFFICIAL_CURRICULUM_IN_SCOPE")
+
+        revision = ""
+        if current_plan and request:
+            existing = "\n".join(
+                f"- {section.get('heading')} : {section.get('resume', '')}"
+                for section in current_plan.get("sections", [])
+            )
+            past = "\n".join(
+                f"- {entry.get('author', '?')} : {entry.get('message', '')}"
+                for entry in (history or [])[-10:]
+            )
+            revision = (
+                f"\n\nPlan actuel ({current_plan.get('title', '')}) :\n{existing}"
+                + (f"\n\nConsignes précédentes :\n{past}" if past else "")
+                + f"\n\nDemande du professeur : {request}"
+            )
+
+        raw = await self._chat(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "Tu prépares le plan d'un cours pour un professeur. "
+                        + _context_line(scope)
+                        + ' Réponds UNIQUEMENT en JSON : {"titre": "...", '
+                        '"sections": [{"titre": "...", "resume": "une phrase '
+                        'sur le contenu prévu"}]}. De 3 à '
+                        f"{self._settings.generation_max_sections} sections, "
+                        "fidèles au programme officiel fourni."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Demande du professeur : {instruction}\n\n"
+                        "Extraits du programme officiel :\n\n"
+                        + _render_passages(frame, "P", 1)
+                        + revision
+                    ),
+                },
+            ]
+        )
+        parsed = _parse_json_block(raw)
+        if not parsed or not isinstance(parsed.get("sections"), list):
+            raise GenerationFailed("le modèle n'a pas produit de plan exploitable")
+        sections: List[PlanSectionDraft] = []
+        for entry in parsed["sections"]:
+            if isinstance(entry, dict):
+                heading = str(entry.get("titre") or entry.get("heading") or "").strip()
+                resume = str(entry.get("resume", "")).strip()
+            else:
+                heading, resume = str(entry).strip(), ""
+            if heading:
+                sections.append(PlanSectionDraft(heading=heading, resume=resume))
+        if not sections:
+            raise GenerationFailed("le plan ne contient aucune section")
+        return PlanDraft(
+            title=str(parsed.get("titre") or instruction).strip(),
+            sections=sections[: self._settings.generation_max_sections],
+            queries=queries,
+            warnings=warnings,
+        )
+
+    async def write_one_section(
+        self,
+        *,
+        heading: str,
+        instruction: str,
+        scope: Scope,
+        course_id: str,
+        strictness: str,
+        plan_headings: List[str],
+        previous_summaries: Optional[List[dict]] = None,
+        current_text: Optional[str] = None,
+        request: Optional[str] = None,
+        history: Optional[List[dict]] = None,
+    ) -> GeneratedCourse:
+        """Rédiger — ou réviser — UNE section du plan validé.
+
+        Le professeur paie une à deux minutes par section, quand il la
+        demande. Le plan complet et les résumés des sections déjà validées
+        accompagnent chaque appel : des sections rédigées séparément doivent
+        rester un seul cours — pas de répétitions, des renvois justes.
+        """
+
+        queries: List[dict] = []
+        warnings: List[str] = []
+        budget = self._settings.generation_max_queries
+
+        async def search(
+            question: str, nature: Optional[str], from_model: bool
+        ) -> List[Passage]:
+            nonlocal budget
+            if from_model:
+                if budget <= 0:
+                    return []
+                budget -= 1
+            passages = await self._retriever.search(
+                query=question,
+                scope=scope,
+                limit=5,
+                max_excerpt_characters=900,
+                course_id=course_id if nature == "support-cours" else None,
+                role=nature,
+            )
+            queries.append(
+                {"question": question, "nature": nature,
+                 "demandeParLeModele": from_model, "resultats": len(passages)}
+            )
+            return passages
+
+        frame = await search(
+            f"{heading} — {instruction}", "programme-officiel", from_model=False
+        )
+        if not frame:
+            warnings.append("NO_OFFICIAL_CURRICULUM_IN_SCOPE")
+
+        context_parts = [f"Plan du cours : {' | '.join(plan_headings)}"]
+        for summary in (previous_summaries or [])[-6:]:
+            context_parts.append(
+                f"Section déjà validée « {summary.get('heading')} » : "
+                f"{summary.get('resume', '')}"
+            )
+        if current_text and request:
+            past = "\n".join(
+                f"- {entry.get('author', '?')} : {entry.get('message', '')}"
+                for entry in (history or [])[-10:]
+            )
+            context_parts.append(
+                f"Version actuelle de la section :\n{current_text}"
+                + (f"\nConsignes précédentes :\n{past}" if past else "")
+                + f"\nConsigne de révision : {request}"
+            )
+
+        section = await self._write_section(
+            heading=heading,
+            instruction=instruction + "\n" + "\n".join(context_parts),
+            scope=scope,
+            strictness=strictness,
+            frame=frame,
+            search=search,
+        )
+        if strictness == "grounded" and section.has_additions:
+            warnings.append("ADDITIONS_IN_GROUNDED_MODE")
+        return GeneratedCourse(
+            title=heading, sections=[section], queries=queries, warnings=warnings
+        )
 
     # ------------------------------------------------------------------ étapes
 

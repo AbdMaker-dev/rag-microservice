@@ -277,6 +277,49 @@ class AdjustRequest(Wire):
     history: List[Dict[str, str]] = Field(default_factory=list, max_length=20)
 
 
+class PlanSection(Wire):
+    heading: str
+    resume: str = ""
+
+
+class PlanRequest(Wire):
+    """Proposer — ou réviser — le plan, sans rédiger une ligne.
+
+    Le professeur discute le plan et le valide AVANT de payer le moindre
+    contenu. Pour une révision : joindre currentPlan, request et history.
+    """
+
+    request_id: str
+    course_id: str = Field(min_length=1, max_length=255)
+    scope: Scope
+    instruction: str = Field(min_length=3, max_length=4000)
+    strictness: Literal["grounded", "enriched"] = "grounded"
+    current_plan: Optional[Dict[str, Any]] = None
+    request: Optional[str] = Field(default=None, max_length=4000)
+    history: List[Dict[str, str]] = Field(default_factory=list, max_length=20)
+
+
+class SectionRequest(Wire):
+    """Rédiger — ou réviser — UNE section du plan validé.
+
+    Le plan complet et les résumés des sections déjà validées accompagnent
+    l'appel : des sections rédigées séparément doivent rester un seul cours.
+    Pour une révision : joindre currentText, request et history.
+    """
+
+    request_id: str
+    course_id: str = Field(min_length=1, max_length=255)
+    scope: Scope
+    instruction: str = Field(min_length=3, max_length=4000)
+    strictness: Literal["grounded", "enriched"] = "grounded"
+    heading: str = Field(min_length=1, max_length=500)
+    plan_headings: List[str] = Field(min_length=1, max_length=20)
+    previous_summaries: List[Dict[str, str]] = Field(default_factory=list, max_length=20)
+    current_text: Optional[str] = None
+    request: Optional[str] = Field(default=None, max_length=4000)
+    history: List[Dict[str, str]] = Field(default_factory=list, max_length=20)
+
+
 class GenerateAccepted(Wire):
     contract_version: Literal["1.0"] = CONTRACT_VERSION
     request_id: str
@@ -298,6 +341,8 @@ class GenerateStatus(Wire):
     status: Literal["running", "done", "failed"]
     title: Optional[str] = None
     sections: List[GeneratedSection] = []
+    # Rendu par /generate/plan : le plan proposé, sections et résumés.
+    plan_sections: List[PlanSection] = []
     # Les recherches que l'IA a faites pour construire le cours — on sait
     # toujours comment un cours a été construit.
     queries: List[Dict[str, Any]] = []

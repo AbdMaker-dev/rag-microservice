@@ -17,9 +17,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.api.dependencies import require_service_token
 from app.config import Settings, get_settings
-from app.core.generation import CourseGenerator, GeneratedCourse
+from app.core.generation import CourseGenerator, GeneratedCourse, PlanDraft
 from app.models.schemas import (
     AdjustRequest,
+    PlanRequest,
+    PlanSection,
+    SectionRequest,
     GenerateAccepted,
     GenerateRequest,
     GenerateStatus,
@@ -69,6 +72,20 @@ async def generation_status(job_id: str, request: Request) -> GenerateStatus:
         )
     if job.status != "done":
         return GenerateStatus(job_id=job.id, status=job.status, error=job.error)
+
+    if isinstance(job.result, PlanDraft):
+        plan: PlanDraft = job.result
+        return GenerateStatus(
+            job_id=job.id,
+            status="done",
+            title=plan.title,
+            plan_sections=[
+                PlanSection(heading=section.heading, resume=section.resume)
+                for section in plan.sections
+            ],
+            queries=plan.queries,
+            warnings=plan.warnings,
+        )
 
     course: GeneratedCourse = job.result  # type: ignore[assignment]
     return GenerateStatus(
@@ -125,5 +142,79 @@ async def adjust(
     logger.info(
         "révision lancée",
         extra={"requestId": body.request_id, "job": job.id},
+    )
+    return GenerateAccepted(request_id=body.request_id, job_id=job.id)
+
+
+@router.post(
+    "/generate/plan",
+    response_model=GenerateAccepted,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def plan(
+    body: PlanRequest,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+) -> GenerateAccepted:
+    """Étape 1 du mode progressif : le plan, discutable, avant tout contenu."""
+
+    generator = CourseGenerator(
+        llm=request.app.state.llm,
+        retriever=request.app.state.retriever,
+        settings=settings,
+    )
+    job = request.app.state.jobs.submit(
+        lambda: generator.draft_plan(
+            instruction=body.instruction,
+            scope=body.scope,
+            course_id=body.course_id,
+            current_plan=body.current_plan,
+            request=body.request,
+            history=body.history,
+        )
+    )
+    logger.info("plan lancé", extra={"requestId": body.request_id, "job": job.id})
+    return GenerateAccepted(request_id=body.request_id, job_id=job.id)
+
+
+@router.post(
+    "/generate/section",
+    response_model=GenerateAccepted,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def section(
+    body: SectionRequest,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+) -> GenerateAccepted:
+    """Étape 2 : le contenu d'UN item du plan validé, à la demande.
+
+    Le professeur avance section par section — génération, chat de révision,
+    validation — jusqu'à la conclusion. Une à deux minutes par section, au
+    moment où il la demande.
+    """
+
+    generator = CourseGenerator(
+        llm=request.app.state.llm,
+        retriever=request.app.state.retriever,
+        settings=settings,
+    )
+    job = request.app.state.jobs.submit(
+        lambda: generator.write_one_section(
+            heading=body.heading,
+            instruction=body.instruction,
+            scope=body.scope,
+            course_id=body.course_id,
+            strictness=body.strictness,
+            plan_headings=body.plan_headings,
+            previous_summaries=body.previous_summaries,
+            current_text=body.current_text,
+            request=body.request,
+            history=body.history,
+        )
+    )
+    logger.info(
+        "section lancée",
+        extra={"requestId": body.request_id, "job": job.id, "heading": body.heading},
     )
     return GenerateAccepted(request_id=body.request_id, job_id=job.id)

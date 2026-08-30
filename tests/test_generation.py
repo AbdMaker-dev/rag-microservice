@@ -247,3 +247,79 @@ def test_l_application_branche_le_redacteur():
 
     source = inspect.getsource(main)
     assert "app.state.llm = build_llm_provider" in source
+
+
+def test_le_plan_se_propose_avec_resumes_sans_rediger_une_ligne():
+    """Étape 1 du progressif : le prof juge le plan avant de payer le contenu."""
+
+    plan = json.dumps({"titre": "Le produit scalaire", "sections": [
+        {"titre": "Définition", "resume": "Projeté orthogonal et notation."},
+        {"titre": "Propriétés", "resume": "Bilinéarité, symétrie."}]})
+    retriever = FakeRetriever()
+    llm = ScriptedLlm([plan])
+
+    draft = asyncio.run(_generator(llm, retriever).draft_plan(
+        instruction="cours produit scalaire", scope=SCOPE, course_id="c"))
+
+    assert draft.title == "Le produit scalaire"
+    assert [s.heading for s in draft.sections] == ["Définition", "Propriétés"]
+    assert draft.sections[0].resume.startswith("Projeté")
+    # Un seul appel modèle, une seule recherche : le plan ne coûte presque rien.
+    assert len(llm.exchanges) == 1
+    assert retriever.calls[0]["role"] == "programme-officiel"
+
+
+def test_le_plan_se_revise_en_conversation():
+    revise = json.dumps({"titre": "T", "sections": [
+        {"titre": "Définition", "resume": ""},
+        {"titre": "Exercices", "resume": "Trois applications."}]})
+    llm = ScriptedLlm([revise])
+
+    draft = asyncio.run(_generator(llm).draft_plan(
+        instruction="cours", scope=SCOPE, course_id="c",
+        current_plan={"title": "T", "sections": [{"heading": "Définition"}]},
+        request="ajoute une partie exercices",
+        history=[{"author": "prof", "message": "reste simple"}]))
+
+    contenu = llm.exchanges[0][1]["content"]
+    assert "Plan actuel" in contenu and "ajoute une partie exercices" in contenu
+    assert "reste simple" in contenu
+    assert [s.heading for s in draft.sections][-1] == "Exercices"
+
+
+def test_une_section_seule_recoit_le_plan_et_les_resumes_valides():
+    """Des sections rédigées séparément doivent rester UN cours."""
+
+    llm = ScriptedLlm(["Contenu de la section [S1], sans répéter la définition."])
+    retriever = FakeRetriever()
+
+    result = asyncio.run(_generator(llm, retriever).write_one_section(
+        heading="Propriétés", instruction="cours produit scalaire",
+        scope=SCOPE, course_id="cours-7", strictness="grounded",
+        plan_headings=["Définition", "Propriétés", "Exercices"],
+        previous_summaries=[{"heading": "Définition",
+                             "resume": "Le projeté orthogonal est posé."}]))
+
+    contenu = llm.exchanges[0][1]["content"]
+    assert "Définition | Propriétés | Exercices" in contenu
+    assert "Le projeté orthogonal est posé." in contenu
+    assert result.sections[0].heading == "Propriétés"
+    # Les recherches de la section restent verrouillées sur le cours.
+    support = [c for c in retriever.calls if c["role"] == "support-cours"][0]
+    assert support["course_id"] == "cours-7"
+
+
+def test_une_section_se_revise_avec_sa_version_actuelle():
+    llm = ScriptedLlm(["Version révisée, plus courte [S1]."])
+
+    result = asyncio.run(_generator(llm).write_one_section(
+        heading="Propriétés", instruction="cours", scope=SCOPE,
+        course_id="c", strictness="grounded", plan_headings=["Propriétés"],
+        current_text="Une version actuelle beaucoup trop longue.",
+        request="raccourcis de moitié",
+        history=[{"author": "prof", "message": "ton simple"}]))
+
+    contenu = llm.exchanges[0][1]["content"]
+    assert "beaucoup trop longue" in contenu
+    assert "raccourcis de moitié" in contenu and "ton simple" in contenu
+    assert "révisée" in result.sections[0].text
