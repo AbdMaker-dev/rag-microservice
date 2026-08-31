@@ -341,7 +341,9 @@ class GenerateStatus(Wire):
     status: Literal["running", "done", "failed"]
     title: Optional[str] = None
     sections: List[GeneratedSection] = []
-    # Rendu par /generate/plan : le plan proposé, sections et résumés.
+    # Rendu par /generate/plan : le plan proposé, sa description — le bref
+    # résumé de ce que le cours couvrira — puis sections et résumés.
+    plan_description: str = ""
     plan_sections: List[PlanSection] = []
     # Les recherches que l'IA a faites pour construire le cours — on sait
     # toujours comment un cours a été construit.

@@ -69,6 +69,9 @@ class PlanSectionDraft:
 @dataclass(frozen=True)
 class PlanDraft:
     title: str
+    # Le bref résumé de ce que le cours couvrira — la colonne description de
+    # la table Plan côté plateforme. L'IA le rédige avec le plan.
+    description: str
     sections: List[PlanSectionDraft]
     queries: List[dict]
     warnings: List[str] = field(default_factory=list)
@@ -469,8 +472,10 @@ class CourseGenerator:
                         "Tu prépares le plan d'un cours pour un professeur. "
                         + _context_line(scope)
                         + ' Réponds UNIQUEMENT en JSON : {"titre": "...", '
-                        '"sections": [{"titre": "...", "resume": "une phrase '
-                        'sur le contenu prévu"}]}. De 3 à '
+                        '"description": "deux phrases sur ce que le cours '
+                        'couvrira", "sections": [{"titre": "...", '
+                        '"resume": "une phrase sur les concepts développés '
+                        'dans cette partie"}]}. De 3 à '
                         f"{self._settings.generation_max_sections} sections, "
                         "fidèles au programme officiel fourni."
                     ),
@@ -502,6 +507,7 @@ class CourseGenerator:
             raise GenerationFailed("le plan ne contient aucune section")
         return PlanDraft(
             title=str(parsed.get("titre") or instruction).strip(),
+            description=str(parsed.get("description", "")).strip(),
             sections=sections[: self._settings.generation_max_sections],
             queries=queries,
             warnings=warnings,

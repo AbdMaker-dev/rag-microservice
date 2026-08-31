@@ -79,6 +79,7 @@ async def generation_status(job_id: str, request: Request) -> GenerateStatus:
             job_id=job.id,
             status="done",
             title=plan.title,
+            plan_description=plan.description,
             plan_sections=[
                 PlanSection(heading=section.heading, resume=section.resume)
                 for section in plan.sections
