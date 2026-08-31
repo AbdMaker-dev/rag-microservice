@@ -130,12 +130,17 @@ class IndexRepository:
             return result.endswith(" 1")
 
     async def list_documents(
-        self, *, scope: Scope, limit: int, offset: int
+        self, *, scope: Scope, limit: int, offset: int,
+        role: Optional[str] = None,
     ) -> List[dict]:
         """Lister les documents d'un périmètre, sans leur contenu.
 
         L'écran de création affiche des titres et des tailles, pas des pavés
         de texte : renvoyer le contenu ici serait lourd pour rien.
+
+        Le niveau et la série ne filtrent que s'ils sont renseignés : les
+        documents indexés avant leur introduction portent une chaîne vide, et
+        l'écran d'administration doit continuer à les voir.
         """
 
         rows = await self._pool.fetch(
@@ -145,11 +150,15 @@ class IndexRepository:
             FROM documents
             WHERE country = $1 AND subject = $2 AND grade = $3
               AND curriculum_version = $4 AND language = $5
+              AND ($6::text = '' OR level = $6)
+              AND ($7::text = '' OR track = $7)
+              AND ($8::text IS NULL OR role = $8)
             ORDER BY indexed_at DESC
-            LIMIT $6 OFFSET $7
+            LIMIT $9 OFFSET $10
             """,
             scope.country, scope.subject, scope.grade,
-            scope.curriculum_version, scope.language, limit, offset,
+            scope.curriculum_version, scope.language,
+            scope.level, scope.track, role, limit, offset,
         )
         return [dict(row) for row in rows]
 
@@ -173,15 +182,21 @@ class IndexRepository:
         )
         return [dict(row) for row in rows]
 
-    async def count_documents(self, *, scope: Scope) -> int:
+    async def count_documents(
+        self, *, scope: Scope, role: Optional[str] = None
+    ) -> int:
         return await self._pool.fetchval(
             """
             SELECT count(*) FROM documents
             WHERE country = $1 AND subject = $2 AND grade = $3
               AND curriculum_version = $4 AND language = $5
+              AND ($6::text = '' OR level = $6)
+              AND ($7::text = '' OR track = $7)
+              AND ($8::text IS NULL OR role = $8)
             """,
             scope.country, scope.subject, scope.grade,
             scope.curriculum_version, scope.language,
+            scope.level, scope.track, role,
         )
 
     async def get_document(self, external_id: str) -> Optional[dict]:

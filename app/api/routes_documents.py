@@ -6,6 +6,8 @@ sont découpés et se recouvrent, ils servent à chercher, pas à relire.
 
 from __future__ import annotations
 
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from app.api.dependencies import require_service_token
@@ -46,6 +48,11 @@ async def list_documents(
     grade: str = Query(...),
     curriculum_version: str = Query(..., alias="curriculumVersion"),
     language: str = Query("fr"),
+    # Optionnels : vides, ils ne filtrent pas — les documents indexés avant
+    # l'introduction du niveau et de la série restent visibles.
+    level: str = Query(""),
+    track: str = Query(""),
+    role: Optional[str] = Query(None),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> DocumentListResponse:
@@ -55,10 +62,14 @@ async def list_documents(
         grade=grade,
         curriculum_version=curriculum_version,
         language=language,
+        level=level,
+        track=track,
     )
     repository = _repository(request)
-    rows = await repository.list_documents(scope=scope, limit=limit, offset=offset)
-    total = await repository.count_documents(scope=scope)
+    rows = await repository.list_documents(
+        scope=scope, limit=limit, offset=offset, role=role
+    )
+    total = await repository.count_documents(scope=scope, role=role)
     return DocumentListResponse(
         total=total, documents=[_summary(row) for row in rows]
     )
