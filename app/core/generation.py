@@ -63,7 +63,10 @@ class SectionDraft:
 @dataclass(frozen=True)
 class PlanSectionDraft:
     heading: str
-    resume: str
+    # L'annonce de ce que la section développera — formules expliquées,
+    # théorèmes démontrés, exemples prévus. L'engagement pris au plan, que la
+    # rédaction devra tenir ; c'est là-dessus que le professeur discute.
+    description: str
 
 
 @dataclass(frozen=True)
@@ -451,7 +454,7 @@ class CourseGenerator:
         revision = ""
         if current_plan and request:
             existing = "\n".join(
-                f"- {section.get('heading')} : {section.get('resume', '')}"
+                f"- {section.get('heading')} : {section.get('description', '')}"
                 for section in current_plan.get("sections", [])
             )
             past = "\n".join(
@@ -474,8 +477,10 @@ class CourseGenerator:
                         + ' Réponds UNIQUEMENT en JSON : {"titre": "...", '
                         '"description": "deux phrases sur ce que le cours '
                         'couvrira", "sections": [{"titre": "...", '
-                        '"resume": "une phrase sur les concepts développés '
-                        'dans cette partie"}]}. De 3 à '
+                        '"description": "2 à 3 phrases annonçant ce que la '
+                        'section développera : les formules expliquées, les '
+                        'théorèmes démontrés, les exemples et exercices '
+                        'prévus"}]}. De 3 à '
                         f"{self._settings.generation_max_sections} sections, "
                         "fidèles au programme officiel fourni."
                     ),
@@ -498,11 +503,15 @@ class CourseGenerator:
         for entry in parsed["sections"]:
             if isinstance(entry, dict):
                 heading = str(entry.get("titre") or entry.get("heading") or "").strip()
-                resume = str(entry.get("resume", "")).strip()
+                description = str(
+                    entry.get("description") or entry.get("resume", "")
+                ).strip()
             else:
-                heading, resume = str(entry).strip(), ""
+                heading, description = str(entry).strip(), ""
             if heading:
-                sections.append(PlanSectionDraft(heading=heading, resume=resume))
+                sections.append(
+                    PlanSectionDraft(heading=heading, description=description)
+                )
         if not sections:
             raise GenerationFailed("le plan ne contient aucune section")
         return PlanDraft(
@@ -571,7 +580,7 @@ class CourseGenerator:
         for summary in (previous_summaries or [])[-6:]:
             context_parts.append(
                 f"Section déjà validée « {summary.get('heading')} » : "
-                f"{summary.get('resume', '')}"
+                f"{summary.get('description', '')}"
             )
         if current_text and request:
             past = "\n".join(

@@ -255,8 +255,8 @@ def test_le_plan_se_propose_avec_resumes_sans_rediger_une_ligne():
     plan = json.dumps({"titre": "Le produit scalaire",
         "description": "Définition, propriétés et applications du produit scalaire en seconde S.",
         "sections": [
-        {"titre": "Définition", "resume": "Projeté orthogonal et notation."},
-        {"titre": "Propriétés", "resume": "Bilinéarité, symétrie."}]})
+        {"titre": "Définition", "description": "J'expliquerai le projeté orthogonal et la notation du produit scalaire."},
+        {"titre": "Propriétés", "description": "Je démontrerai la symétrie et la bilinéarité."}]})
     retriever = FakeRetriever()
     llm = ScriptedLlm([plan])
 
@@ -268,7 +268,7 @@ def test_le_plan_se_propose_avec_resumes_sans_rediger_une_ligne():
     # est rédigée par l'IA en même temps que le plan.
     assert draft.description.startswith("Définition, propriétés")
     assert [s.heading for s in draft.sections] == ["Définition", "Propriétés"]
-    assert draft.sections[0].resume.startswith("Projeté")
+    assert draft.sections[0].description.startswith("J'expliquerai le projeté")
     # Un seul appel modèle, une seule recherche : le plan ne coûte presque rien.
     assert len(llm.exchanges) == 1
     assert retriever.calls[0]["role"] == "programme-officiel"
@@ -276,8 +276,8 @@ def test_le_plan_se_propose_avec_resumes_sans_rediger_une_ligne():
 
 def test_le_plan_se_revise_en_conversation():
     revise = json.dumps({"titre": "T", "sections": [
-        {"titre": "Définition", "resume": ""},
-        {"titre": "Exercices", "resume": "Trois applications."}]})
+        {"titre": "Définition", "description": ""},
+        {"titre": "Exercices", "description": "Je proposerai trois applications."}]})
     llm = ScriptedLlm([revise])
 
     draft = asyncio.run(_generator(llm).draft_plan(
@@ -303,7 +303,7 @@ def test_une_section_seule_recoit_le_plan_et_les_resumes_valides():
         scope=SCOPE, course_id="cours-7", strictness="grounded",
         plan_headings=["Définition", "Propriétés", "Exercices"],
         previous_summaries=[{"heading": "Définition",
-                             "resume": "Le projeté orthogonal est posé."}]))
+                             "description": "Le projeté orthogonal est posé."}]))
 
     contenu = llm.exchanges[0][1]["content"]
     assert "Définition | Propriétés | Exercices" in contenu

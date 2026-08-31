@@ -279,7 +279,9 @@ class AdjustRequest(Wire):
 
 class PlanSection(Wire):
     heading: str
-    resume: str = ""
+    # L'annonce de ce que la section développera — formules, théorèmes,
+    # exemples prévus. Devient PlanSection.description côté plateforme.
+    description: str = ""
 
 
 class PlanRequest(Wire):

@@ -81,7 +81,7 @@ async def generation_status(job_id: str, request: Request) -> GenerateStatus:
             title=plan.title,
             plan_description=plan.description,
             plan_sections=[
-                PlanSection(heading=section.heading, resume=section.resume)
+                PlanSection(heading=section.heading, description=section.description)
                 for section in plan.sections
             ],
             queries=plan.queries,
