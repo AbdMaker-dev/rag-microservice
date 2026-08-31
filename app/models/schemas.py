@@ -277,11 +277,23 @@ class AdjustRequest(Wire):
     history: List[Dict[str, str]] = Field(default_factory=list, max_length=20)
 
 
-class PlanSection(Wire):
+class PlanChild(Wire):
+    """Une sous-partie proposée : un titre seul.
+
+    Son annonce, c'est la description de son parent — chaque sous-partie
+    correspond à un élément qui y est annoncé.
+    """
+
     heading: str
-    # L'annonce de ce que la section développera — formules, théorèmes,
-    # exemples prévus. Devient PlanSection.description côté plateforme.
+
+
+class PlanItem(Wire):
+    """Une partie du plan proposé. Sans enfants, c'est une feuille : elle
+    recevra un contenu. Avec enfants, son contenu EST ses enfants."""
+
+    heading: str
     description: str = ""
+    children: List[PlanChild] = []
 
 
 class PlanRequest(Wire):
@@ -347,10 +359,11 @@ class GenerateStatus(Wire):
     status: Literal["running", "done", "failed"]
     title: Optional[str] = None
     sections: List[GeneratedSection] = []
-    # Rendu par /generate/plan : le plan proposé, sa description — le bref
-    # résumé de ce que le cours couvrira — puis sections et résumés.
-    plan_description: str = ""
-    plan_sections: List[PlanSection] = []
+    # Rendu par /generate/plan : le plan proposé — sa description (le bref
+    # résumé de ce que le cours couvrira) et ses parties hiérarchiques,
+    # exactement la forme que la plateforme copiera à la validation.
+    description: str = ""
+    items: List[PlanItem] = []
     # Les recherches que l'IA a faites pour construire le cours — on sait
     # toujours comment un cours a été construit.
     queries: List[Dict[str, Any]] = []

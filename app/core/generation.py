@@ -61,12 +61,18 @@ class SectionDraft:
 
 
 @dataclass(frozen=True)
-class PlanSectionDraft:
+class PlanItemDraft:
+    """Une partie du plan proposé.
+
+    La description ANNONCE ce que la partie développera ; les sous-parties
+    (children) sont sa réalisation — des titres seuls, chacun correspondant à
+    un élément annoncé. Une partie sans sous-parties est une feuille : c'est
+    elle qui recevra un contenu. Le contenu d'un parent EST ses enfants.
+    """
+
     heading: str
-    # L'annonce de ce que la section développera — formules expliquées,
-    # théorèmes démontrés, exemples prévus. L'engagement pris au plan, que la
-    # rédaction devra tenir ; c'est là-dessus que le professeur discute.
     description: str
+    children: List[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -75,7 +81,7 @@ class PlanDraft:
     # Le bref résumé de ce que le cours couvrira — la colonne description de
     # la table Plan côté plateforme. L'IA le rédige avec le plan.
     description: str
-    sections: List[PlanSectionDraft]
+    items: List[PlanItemDraft]
     queries: List[dict]
     warnings: List[str] = field(default_factory=list)
 
@@ -453,10 +459,17 @@ class CourseGenerator:
 
         revision = ""
         if current_plan and request:
-            existing = "\n".join(
-                f"- {section.get('heading')} : {section.get('description', '')}"
-                for section in current_plan.get("sections", [])
-            )
+            lines = []
+            for item in current_plan.get("items", current_plan.get("sections", [])):
+                lines.append(
+                    f"- {item.get('heading')} : {item.get('description', '')}"
+                )
+                for child in item.get("children", []):
+                    child_heading = (
+                        child.get("heading") if isinstance(child, dict) else child
+                    )
+                    lines.append(f"    - {child_heading}")
+            existing = "\n".join(lines)
             past = "\n".join(
                 f"- {entry.get('author', '?')} : {entry.get('message', '')}"
                 for entry in (history or [])[-10:]
@@ -476,11 +489,16 @@ class CourseGenerator:
                         + _context_line(scope)
                         + ' Réponds UNIQUEMENT en JSON : {"titre": "...", '
                         '"description": "deux phrases sur ce que le cours '
-                        'couvrira", "sections": [{"titre": "...", '
+                        'couvrira", "parties": [{"titre": "...", '
                         '"description": "2 à 3 phrases annonçant ce que la '
-                        'section développera : les formules expliquées, les '
-                        'théorèmes démontrés, les exemples et exercices '
-                        'prévus"}]}. De 3 à '
+                        'partie développera : formules expliquées, théorèmes '
+                        'démontrés, exemples prévus", "sousParties": '
+                        '["titre seul", "titre seul"]}]}. RÈGLE : chaque '
+                        'sous-partie correspond à UN élément annoncé dans la '
+                        'description de sa partie — rien d\'annoncé sans '
+                        'sous-partie, aucune sous-partie non annoncée. Une '
+                        'partie simple peut avoir sousParties: []. Deux '
+                        'niveaux maximum. De 3 à '
                         f"{self._settings.generation_max_sections} sections, "
                         "fidèles au programme officiel fourni."
                     ),
@@ -497,27 +515,38 @@ class CourseGenerator:
             ]
         )
         parsed = _parse_json_block(raw)
-        if not parsed or not isinstance(parsed.get("sections"), list):
+        entries = parsed.get("parties") if parsed else None
+        if entries is None and parsed:
+            entries = parsed.get("sections")  # tolérance de lecture
+        if not parsed or not isinstance(entries, list):
             raise GenerationFailed("le modèle n'a pas produit de plan exploitable")
-        sections: List[PlanSectionDraft] = []
-        for entry in parsed["sections"]:
+        items: List[PlanItemDraft] = []
+        for entry in entries:
             if isinstance(entry, dict):
                 heading = str(entry.get("titre") or entry.get("heading") or "").strip()
-                description = str(
-                    entry.get("description") or entry.get("resume", "")
-                ).strip()
+                description = str(entry.get("description", "")).strip()
+                raw_children = entry.get("sousParties") or entry.get("children") or []
+                children = [
+                    str(child.get("titre") or child.get("heading") or "").strip()
+                    if isinstance(child, dict)
+                    else str(child).strip()
+                    for child in raw_children
+                ]
+                children = [child for child in children if child][:8]
             else:
-                heading, description = str(entry).strip(), ""
+                heading, description, children = str(entry).strip(), "", []
             if heading:
-                sections.append(
-                    PlanSectionDraft(heading=heading, description=description)
+                items.append(
+                    PlanItemDraft(
+                        heading=heading, description=description, children=children
+                    )
                 )
-        if not sections:
-            raise GenerationFailed("le plan ne contient aucune section")
+        if not items:
+            raise GenerationFailed("le plan ne contient aucune partie")
         return PlanDraft(
             title=str(parsed.get("titre") or instruction).strip(),
             description=str(parsed.get("description", "")).strip(),
-            sections=sections[: self._settings.generation_max_sections],
+            items=items[: self._settings.generation_max_sections],
             queries=queries,
             warnings=warnings,
         )

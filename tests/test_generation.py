@@ -254,9 +254,14 @@ def test_le_plan_se_propose_avec_resumes_sans_rediger_une_ligne():
 
     plan = json.dumps({"titre": "Le produit scalaire",
         "description": "Définition, propriétés et applications du produit scalaire en seconde S.",
-        "sections": [
-        {"titre": "Définition", "description": "J'expliquerai le projeté orthogonal et la notation du produit scalaire."},
-        {"titre": "Propriétés", "description": "Je démontrerai la symétrie et la bilinéarité."}]})
+        "parties": [
+        {"titre": "Introduction",
+         "description": "Je rappellerai les acquis sur les vecteurs.",
+         "sousParties": []},
+        {"titre": "Le produit scalaire",
+         "description": "Je définirai le produit scalaire, je démontrerai les propriétés, je proposerai des exercices.",
+         "sousParties": ["Définition par le projeté orthogonal",
+                          "Propriétés de calcul", "Exercices"]}]})
     retriever = FakeRetriever()
     llm = ScriptedLlm([plan])
 
@@ -264,32 +269,39 @@ def test_le_plan_se_propose_avec_resumes_sans_rediger_une_ligne():
         instruction="cours produit scalaire", scope=SCOPE, course_id="c"))
 
     assert draft.title == "Le produit scalaire"
-    # La description du plan — colonne de la table Plan côté plateforme —
-    # est rédigée par l'IA en même temps que le plan.
     assert draft.description.startswith("Définition, propriétés")
-    assert [s.heading for s in draft.sections] == ["Définition", "Propriétés"]
-    assert draft.sections[0].description.startswith("J'expliquerai le projeté")
+    assert [i.heading for i in draft.items] == ["Introduction", "Le produit scalaire"]
+    # Une partie simple est une feuille ; les sous-parties sont des titres
+    # seuls — leur annonce, c'est la description du parent.
+    assert draft.items[0].children == []
+    assert draft.items[1].children == [
+        "Définition par le projeté orthogonal", "Propriétés de calcul", "Exercices"]
     # Un seul appel modèle, une seule recherche : le plan ne coûte presque rien.
     assert len(llm.exchanges) == 1
     assert retriever.calls[0]["role"] == "programme-officiel"
 
 
 def test_le_plan_se_revise_en_conversation():
-    revise = json.dumps({"titre": "T", "sections": [
-        {"titre": "Définition", "description": ""},
-        {"titre": "Exercices", "description": "Je proposerai trois applications."}]})
+    revise = json.dumps({"titre": "T", "parties": [
+        {"titre": "Définition", "description": "", "sousParties": []},
+        {"titre": "Exercices", "description": "Je proposerai trois applications.",
+         "sousParties": []}]})
     llm = ScriptedLlm([revise])
 
     draft = asyncio.run(_generator(llm).draft_plan(
         instruction="cours", scope=SCOPE, course_id="c",
-        current_plan={"title": "T", "sections": [{"heading": "Définition"}]},
+        current_plan={"title": "T", "items": [
+            {"heading": "Définition", "description": "…",
+             "children": [{"heading": "Notation"}]}]},
         request="ajoute une partie exercices",
         history=[{"author": "prof", "message": "reste simple"}]))
 
     contenu = llm.exchanges[0][1]["content"]
     assert "Plan actuel" in contenu and "ajoute une partie exercices" in contenu
     assert "reste simple" in contenu
-    assert [s.heading for s in draft.sections][-1] == "Exercices"
+    # la hiérarchie du plan courant est montrée au modèle, enfants compris
+    assert "    - Notation" in contenu
+    assert [i.heading for i in draft.items][-1] == "Exercices"
 
 
 def test_une_section_seule_recoit_le_plan_et_les_resumes_valides():

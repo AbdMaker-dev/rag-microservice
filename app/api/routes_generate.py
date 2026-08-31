@@ -20,8 +20,9 @@ from app.config import Settings, get_settings
 from app.core.generation import CourseGenerator, GeneratedCourse, PlanDraft
 from app.models.schemas import (
     AdjustRequest,
+    PlanChild,
+    PlanItem,
     PlanRequest,
-    PlanSection,
     SectionRequest,
     GenerateAccepted,
     GenerateRequest,
@@ -79,10 +80,14 @@ async def generation_status(job_id: str, request: Request) -> GenerateStatus:
             job_id=job.id,
             status="done",
             title=plan.title,
-            plan_description=plan.description,
-            plan_sections=[
-                PlanSection(heading=section.heading, description=section.description)
-                for section in plan.sections
+            description=plan.description,
+            items=[
+                PlanItem(
+                    heading=item.heading,
+                    description=item.description,
+                    children=[PlanChild(heading=child) for child in item.children],
+                )
+                for item in plan.items
             ],
             queries=plan.queries,
             warnings=plan.warnings,
