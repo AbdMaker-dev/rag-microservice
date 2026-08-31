@@ -346,3 +346,19 @@ def test_la_section_tient_l_engagement_valide_par_le_prof():
     contenu = llm.exchanges[0][1]["content"]
     assert "validé par le professeur" in contenu
     assert "SANS l'inégalité de Schwarz" in contenu
+
+
+def test_la_description_guide_aussi_la_recherche_d_extraits():
+    """« Je démontrerai les identités remarquables » cherche les identités
+    remarquables dans les documents — pas seulement le titre de la section."""
+
+    llm = ScriptedLlm(["Contenu [S1]."])
+    retriever = FakeRetriever()
+
+    asyncio.run(_generator(llm, retriever).write_one_section(
+        heading="Propriétés", instruction="cours", scope=SCOPE,
+        course_id="c", strictness="grounded", plan_headings=["Propriétés"],
+        description="Je démontrerai les identités remarquables (U+V)²."))
+
+    for call in retriever.calls:
+        assert "identités remarquables" in call["query"]

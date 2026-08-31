@@ -571,9 +571,12 @@ class CourseGenerator:
             )
             return passages
 
-        frame = await search(
-            f"{heading} — {instruction}", "programme-officiel", from_model=False
-        )
+        # La description validée dit CE QUE la section doit contenir : c'est
+        # elle qui guide la recherche d'extraits, avant la note générale du
+        # cours. « Je démontrerai les identités remarquables » cherche les
+        # identités remarquables — pas le titre de la section.
+        probe = f"{heading}. {description}" if description else f"{heading} — {instruction}"
+        frame = await search(probe, "programme-officiel", from_model=False)
         if not frame:
             warnings.append("NO_OFFICIAL_CURRICULUM_IN_SCOPE")
 
