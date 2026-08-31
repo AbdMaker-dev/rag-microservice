@@ -376,13 +376,14 @@ def test_la_description_guide_aussi_la_recherche_d_extraits():
         assert "identités remarquables" in call["query"]
 
 
-def test_le_prompt_du_plan_impose_le_ton_collectif():
-    """« On rappellera… », pas « je rappellerai… » : le professeur et l'IA
-    construisent le cours ensemble — la description ne doit pas sonner comme
-    si l'IA s'appropriait le cours."""
+def test_le_prompt_du_plan_impose_le_ton_impersonnel():
+    """La description ÉNONCE ce qui sera fait — « Définition de… ;
+    démonstration de… » — sans personne : ni « je » qui approprierait le
+    cours à l'IA, ni « nous » qui le personnaliserait. Le style des
+    programmes officiels."""
 
     plan = json.dumps({"titre": "T", "parties": [
-        {"titre": "A", "description": "Nous définirons le produit scalaire.",
+        {"titre": "A", "description": "Définition du produit scalaire.",
          "sousParties": []}]})
     llm = ScriptedLlm([plan])
 
@@ -390,5 +391,5 @@ def test_le_prompt_du_plan_impose_le_ton_collectif():
         instruction="cours", scope=SCOPE, course_id="c"))
 
     consigne = llm.exchanges[0][0]["content"]
-    assert "première personne du pluriel" in consigne
-    assert "ensemble" in consigne
+    assert "IMPERSONNELLE" in consigne
+    assert "Définition du produit scalaire" in consigne
