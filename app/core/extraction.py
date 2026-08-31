@@ -21,6 +21,7 @@ from time import perf_counter
 from typing import Callable, Dict, List, Optional
 
 from app.core.encoding import RepairPlan, apply_plan, build_plan
+from app.core.figures import collect_regions, without_furniture
 from app.core.pdf_encoding import repair_pdf
 from app.core.pdf_profile import PdfProfile, is_tagged, measure_page
 from app.core.struct_tree import TreeHealth, inspect
@@ -198,6 +199,9 @@ class PdfReading:
     timings: Dict[str, float] = field(default_factory=dict)
     tree: TreeHealth = field(default_factory=TreeHealth)
     read_by_tree: bool = False
+    # Zones dessinées relevées au passage — figures de géométrie, formules
+    # posées en image. La capture en PNG se fait plus tard, hors de la passe.
+    figures: List = field(default_factory=list)
 
 
 def _boundaries_for(page_lines, found, fallback, width, metrics) -> List[float]:
@@ -295,6 +299,7 @@ def read_pdf_document(payload: bytes, repair: bool = True) -> PdfReading:
     coverages: List[float] = []
     needing_ocr: List[int] = []
     ruled: List[int] = []
+    figure_regions: List = []
 
     with _step(timings, "lecture"):
         with pdfplumber.open(io.BytesIO(payload)) as document:
@@ -339,6 +344,13 @@ def read_pdf_document(payload: bytes, repair: bool = True) -> PdfReading:
 
                 widths.append(float(page.width))
                 measure_page(number, page, words, coverages, needing_ocr, ruled)
+
+                # Les primitives de dessin sont déjà parsées à ce stade : la
+                # collecte des figures ne coûte que leur agrégation.
+                try:
+                    figure_regions.extend(collect_regions(number, page))
+                except Exception:  # noqa: BLE001
+                    logger.warning("figures illisibles sur une page")
 
     # La voie se décide avant de produire quoi que ce soit : calculer un rendu
     # par colonnes pour le jeter ensuite parce que l'arbre l'emporte, c'est du
@@ -394,7 +406,10 @@ def read_pdf_document(payload: bytes, repair: bool = True) -> PdfReading:
                     pages = [apply_plan(page, plan) for page in pages]
                     logger.info("rattrapage mot à mot", extra={"words": len(plan.words)})
 
-    return PdfReading(pages, plan, fonts, described, ruled, script, timings, tree, by_tree)
+    return PdfReading(
+        pages, plan, fonts, described, ruled, script, timings, tree, by_tree,
+        figures=without_furniture(figure_regions),
+    )
 
 
 def read_pdf_pages(payload: bytes) -> list:

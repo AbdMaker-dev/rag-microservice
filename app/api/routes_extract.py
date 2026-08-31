@@ -18,12 +18,14 @@ from __future__ import annotations
 import base64
 import binascii
 import logging
+from time import perf_counter
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.api.dependencies import require_service_token
 from app.config import Settings, get_settings
 from app.core.encoding import RepairPlan
+from app.core.figures import annotate, render_figures
 from app.core.extraction import (
     UnsupportedMediaType,
     assemble,
@@ -38,6 +40,7 @@ from app.core.routing import Route, classify
 from app.core.confidence import inspect_section
 from app.core.quality import assess
 from app.models.schemas import (
+    CapturedFigure,
     DocumentAnalysis,
     ExtractedSection,
     SectionIssue,
@@ -76,7 +79,7 @@ def _decode(request: ExtractRequest, settings: Settings) -> bytes:
 def _extract_pdf(payload: bytes, settings: Settings) -> tuple:
     """Lire un PDF et rétablir son encodage.
 
-    Renvoie (texte, plan, analyse, avertissements).
+    Renvoie (texte, plan, analyse, avertissements, figures).
     """
 
     reading = read_pdf_document(payload, repair=settings.encoding_repair_enabled)
@@ -132,8 +135,35 @@ def _extract_pdf(payload: bytes, settings: Settings) -> tuple:
             if font.changed
         ],
     )
+    # Les zones dessinées — figures de géométrie, formules posées en image —
+    # sont capturées en PNG : sans elles, un schéma disparaît du texte en
+    # silence. Le texte reçoit un marqueur par capture, sous sa page.
+    text = clean_ocr_text(assemble(pages))
+    figures: list = []
+    if reading.figures:
+        started = perf_counter()
+        captured = render_figures(payload, reading.figures)
+        text = annotate(text, captured)
+        figures = [
+            CapturedFigure(
+                figure_id=figure.figure_id,
+                page=figure.page,
+                width=figure.width,
+                height=figure.height,
+                image_base64=base64.b64encode(figure.png).decode("ascii"),
+            )
+            for figure in captured
+        ]
+        logger.info(
+            "figures capturées",
+            extra={
+                "figures": len(figures),
+                "seconds": round(perf_counter() - started, 3),
+            },
+        )
+
     logger.info("étapes de lecture", extra={"timings": reading.timings})
-    return clean_ocr_text(assemble(pages)), plan, analysis, warnings
+    return text, plan, analysis, warnings, figures
 
 
 def _describe(section: dict) -> ExtractedSection:
@@ -166,6 +196,7 @@ async def extract(
     plan = RepairPlan(words={}, fonts={}, unreadable_fonts=[])
     analysis = None
     warnings: list = []
+    figures: list = []
 
     # Le type déclaré par l'appelant n'engage que lui : un navigateur devine
     # l'extension et se trompe régulièrement. On lit la signature du fichier et
@@ -197,7 +228,10 @@ async def extract(
 
     try:
         if media_type == "application/pdf":
-            text, plan, analysis, warnings = _extract_pdf(payload, settings)
+            # extend, pas remplacer : MEDIA_TYPE_MISMATCH posé plus haut
+            # disparaissait de la réponse pour les PDFs.
+            text, plan, analysis, pdf_warnings, figures = _extract_pdf(payload, settings)
+            warnings.extend(pdf_warnings)
         else:
             text = load(payload, media_type)
             # Le contrat ne change pas avec le format : l'interface prof lit
@@ -297,5 +331,6 @@ async def extract(
             unreadable_fonts=plan.unreadable_fonts,
         ),
         analysis=analysis,
+        figures=figures,
         warnings=warnings,
     )

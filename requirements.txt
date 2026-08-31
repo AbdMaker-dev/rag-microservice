@@ -13,6 +13,11 @@ asyncpg==0.30.0
 pdfplumber==0.11.10
 python-docx==1.2.0
 
+# Capture des figures : rendu des zones dessinées en PNG. Tous deux arrivent
+# déjà avec pdfplumber ; épinglés parce que le code les importe directement.
+pypdfium2==5.13.0
+pillow==12.3.0
+
 # Découpage conscient des tokens. Optionnel au runtime : le chunking retombe
 # sur une heuristique déterministe en son absence.
 tiktoken==0.13.0

@@ -135,6 +135,24 @@ class DocumentAnalysis(Wire):
     fonts: List[FontDiagnosis] = []
 
 
+class CapturedFigure(Wire):
+    """Une zone dessinée du document, capturée en image.
+
+    Figures de géométrie, mais aussi formules posées en image par un export
+    Word : tout ce que la couche texte ne porte pas. Le texte extrait signale
+    chaque capture par un marqueur `[FIGURE fN — p. P]` ; l'image part ici,
+    en PNG base64 — le service ne stocke rien, c'est l'appelant qui la garde
+    et qui remplace le marqueur par son URL à l'affichage.
+    """
+
+    figure_id: str
+    page: int
+    # Dimensions en pixels du PNG rendu (150 dpi, plafonné).
+    width: int
+    height: int
+    image_base64: str
+
+
 class ExtractResponse(Wire):
     contract_version: Literal["1.0"] = CONTRACT_VERSION
     request_id: str
@@ -145,6 +163,7 @@ class ExtractResponse(Wire):
     sections: List[ExtractedSection]
     quality: ExtractionQuality
     analysis: Optional[DocumentAnalysis] = None
+    figures: List[CapturedFigure] = []
     warnings: List[str] = []
 
 
