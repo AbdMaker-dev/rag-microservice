@@ -252,7 +252,9 @@ def test_l_application_branche_le_redacteur():
 def test_le_plan_se_propose_avec_resumes_sans_rediger_une_ligne():
     """Étape 1 du progressif : le prof juge le plan avant de payer le contenu."""
 
-    plan = json.dumps({"titre": "Le produit scalaire", "sections": [
+    plan = json.dumps({"titre": "Le produit scalaire",
+        "description": "Définition, propriétés et applications du produit scalaire en seconde S.",
+        "sections": [
         {"titre": "Définition", "resume": "Projeté orthogonal et notation."},
         {"titre": "Propriétés", "resume": "Bilinéarité, symétrie."}]})
     retriever = FakeRetriever()
@@ -262,6 +264,9 @@ def test_le_plan_se_propose_avec_resumes_sans_rediger_une_ligne():
         instruction="cours produit scalaire", scope=SCOPE, course_id="c"))
 
     assert draft.title == "Le produit scalaire"
+    # La description du plan — colonne de la table Plan côté plateforme —
+    # est rédigée par l'IA en même temps que le plan.
+    assert draft.description.startswith("Définition, propriétés")
     assert [s.heading for s in draft.sections] == ["Définition", "Propriétés"]
     assert draft.sections[0].resume.startswith("Projeté")
     # Un seul appel modèle, une seule recherche : le plan ne coûte presque rien.
