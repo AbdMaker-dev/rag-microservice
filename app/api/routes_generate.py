@@ -203,6 +203,7 @@ async def section(
     job = request.app.state.jobs.submit(
         lambda: generator.write_one_section(
             heading=body.heading,
+            description=body.description,
             instruction=body.instruction,
             scope=body.scope,
             course_id=body.course_id,

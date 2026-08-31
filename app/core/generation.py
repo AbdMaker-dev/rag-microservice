@@ -531,6 +531,7 @@ class CourseGenerator:
         course_id: str,
         strictness: str,
         plan_headings: List[str],
+        description: str = "",
         previous_summaries: Optional[List[dict]] = None,
         current_text: Optional[str] = None,
         request: Optional[str] = None,
@@ -577,6 +578,13 @@ class CourseGenerator:
             warnings.append("NO_OFFICIAL_CURRICULUM_IN_SCOPE")
 
         context_parts = [f"Plan du cours : {' | '.join(plan_headings)}"]
+        if description:
+            # L'engagement pris au plan — éventuellement corrigé à la main
+            # par le professeur avant validation. La section DOIT le tenir.
+            context_parts.append(
+                "Ce que cette section doit développer, validé par le "
+                f"professeur : {description}"
+            )
         for summary in (previous_summaries or [])[-6:]:
             context_parts.append(
                 f"Section déjà validée « {summary.get('heading')} » : "

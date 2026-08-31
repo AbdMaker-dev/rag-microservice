@@ -328,3 +328,21 @@ def test_une_section_se_revise_avec_sa_version_actuelle():
     assert "beaucoup trop longue" in contenu
     assert "raccourcis de moitié" in contenu and "ton simple" in contenu
     assert "révisée" in result.sections[0].text
+
+
+def test_la_section_tient_l_engagement_valide_par_le_prof():
+    """La description validée — éventuellement corrigée à la main par le
+    professeur — est le contrat de contenu : elle doit être sous les yeux du
+    modèle au moment de rédiger."""
+
+    llm = ScriptedLlm(["Contenu conforme à l'engagement [S1]."])
+
+    asyncio.run(_generator(llm).write_one_section(
+        heading="Propriétés", instruction="cours", scope=SCOPE,
+        course_id="c", strictness="grounded", plan_headings=["Propriétés"],
+        description=("Je démontrerai la symétrie et la bilinéarité, puis "
+                     "deux exemples guidés — SANS l'inégalité de Schwarz.")))
+
+    contenu = llm.exchanges[0][1]["content"]
+    assert "validé par le professeur" in contenu
+    assert "SANS l'inégalité de Schwarz" in contenu

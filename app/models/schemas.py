@@ -315,6 +315,10 @@ class SectionRequest(Wire):
     instruction: str = Field(min_length=3, max_length=4000)
     strictness: Literal["grounded", "enriched"] = "grounded"
     heading: str = Field(min_length=1, max_length=500)
+    # La description VALIDÉE de la section — telle que sauvée par la
+    # plateforme, y compris si le professeur l'a corrigée à la main. C'est le
+    # contrat de contenu que la rédaction doit tenir.
+    description: str = ""
     plan_headings: List[str] = Field(min_length=1, max_length=20)
     previous_summaries: List[Dict[str, str]] = Field(default_factory=list, max_length=20)
     current_text: Optional[str] = None
