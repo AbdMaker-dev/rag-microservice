@@ -374,3 +374,21 @@ def test_la_description_guide_aussi_la_recherche_d_extraits():
 
     for call in retriever.calls:
         assert "identités remarquables" in call["query"]
+
+
+def test_le_prompt_du_plan_impose_le_ton_collectif():
+    """« On rappellera… », pas « je rappellerai… » : le professeur et l'IA
+    construisent le cours ensemble — la description ne doit pas sonner comme
+    si l'IA s'appropriait le cours."""
+
+    plan = json.dumps({"titre": "T", "parties": [
+        {"titre": "A", "description": "Nous définirons le produit scalaire.",
+         "sousParties": []}]})
+    llm = ScriptedLlm([plan])
+
+    asyncio.run(_generator(llm).draft_plan(
+        instruction="cours", scope=SCOPE, course_id="c"))
+
+    consigne = llm.exchanges[0][0]["content"]
+    assert "première personne du pluriel" in consigne
+    assert "ensemble" in consigne
