@@ -69,6 +69,12 @@ class Settings(BaseSettings):
     generation_output_tokens: int = Field(default=1_200, ge=128, le=8_192)
     inference_max_attempts: int = Field(default=3, ge=1, le=10)
 
+    # --- Tuteur élève (Lawal) -----------------------------------------------------
+    # Une réponse de tuteur est courte : moins de recherches et moins de
+    # tokens de sortie qu'une rédaction de cours — l'élève attend.
+    answer_max_queries: int = Field(default=5, ge=1, le=20)
+    answer_output_tokens: int = Field(default=700, ge=128, le=4_096)
+
     # --- Synthèse vocale ----------------------------------------------------------
     # La voix choisie à l'oreille par Alioune sur trois échantillons
     # (31/08/2026). Le fichier .onnx est téléchargé au build de l'image ;

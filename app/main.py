@@ -19,6 +19,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 from app.api import (
+    routes_answer,
     routes_generate,
     routes_documents,
     routes_extract,
@@ -35,6 +36,7 @@ from app.core.jobs import JobStore
 from app.core.llm import build_llm_provider
 from app.core.retrieval import Retriever
 from app.core.speech import SpeechEngine
+from app.core.tutor import Tutor
 from app.db.repository import IndexRepository
 
 logger = logging.getLogger(__name__)
@@ -66,6 +68,11 @@ async def lifespan(app: FastAPI):
     # La voix des cours. Chargée au premier appel, pas au démarrage : un
     # service dont la voix manque doit quand même extraire et indexer.
     app.state.speech = SpeechEngine(settings.piper_voice_path)
+    # Le tuteur des élèves — même règle que le rédacteur : instancié ICI,
+    # sinon /answer lève un 500 au premier appel réel.
+    app.state.tutor = Tutor(
+        llm=app.state.llm, retriever=app.state.retriever, settings=settings
+    )
     app.state.retriever = Retriever(
         embeddings=embeddings, repository=app.state.repository
     )
@@ -101,6 +108,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_search.router)
     app.include_router(routes_generate.router)
     app.include_router(routes_speech.router)
+    app.include_router(routes_answer.router)
 
     @app.exception_handler(Exception)
     async def unhandled(request, exc):  # noqa: ANN001, ARG001

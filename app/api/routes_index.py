@@ -39,7 +39,7 @@ async def index(
     # aucun — il fait référence pour tout le périmètre. Les deux erreurs
     # inverses sont refusées : un support orphelin serait introuvable à la
     # génération, un programme rattaché à un cours cesserait d'être commun.
-    if body.role == "support-cours" and not body.course_id:
+    if body.role in ("support-cours", "cours-publie") and not body.course_id:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={"code": "COURSE_ID_REQUIRED_FOR_COURSE_MATERIAL"},

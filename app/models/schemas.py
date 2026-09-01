@@ -170,7 +170,9 @@ class ExtractResponse(Wire):
 # --------------------------------------------------------------------- indexer
 
 
-DocumentRole = Literal["support-cours", "programme-officiel"]
+# « cours-publie » : le contenu assemblé d'un cours publié, indexé par la
+# plateforme à la publication — c'est ce que le tuteur élève cite en premier.
+DocumentRole = Literal["support-cours", "programme-officiel", "cours-publie"]
 
 
 class IndexRequest(Wire):
@@ -385,6 +387,58 @@ class GenerateStatus(Wire):
     items: List[PlanItem] = []
     # Les recherches que l'IA a faites pour construire le cours — on sait
     # toujours comment un cours a été construit.
+    queries: List[Dict[str, Any]] = []
+    warnings: List[str] = []
+    error: Optional[str] = None
+
+
+# ---------------------------------------------------------------------- answer
+
+
+class TutorTurn(Wire):
+    """Un tour du fil élève ↔ Lawal — l'historique vit côté plateforme."""
+
+    role: Literal["eleve", "lawal"]
+    content: str = Field(min_length=1, max_length=4_000)
+
+
+class AnswerRequest(Wire):
+    request_id: str
+    # Le cours depuis lequel l'élève pose sa question — jamais choisi par le
+    # client final : la plateforme le déduit de la page où il se trouve.
+    course_id: str = Field(min_length=1)
+    # Le périmètre vient du COMPTE de l'élève et de son inscription : c'est
+    # lui qui adapte le niveau de langue (classe) et verrouille le pays.
+    scope: Scope
+    question: str = Field(min_length=1, max_length=2_000)
+    history: List[TutorTurn] = Field(default_factory=list, max_length=20)
+
+
+class AnswerAccepted(Wire):
+    contract_version: Literal["1.0"] = CONTRACT_VERSION
+    request_id: str
+    job_id: str
+    status: Literal["running"] = "running"
+
+
+class TutorCitation(Wire):
+    label: str
+    document_id: str
+    title: str
+    locator: str
+
+
+class AnswerStatus(Wire):
+    contract_version: Literal["1.0"] = CONTRACT_VERSION
+    job_id: str
+    status: Literal["running", "done", "failed"]
+    answer: str = ""
+    # La petite question finale : vérifier que le concept est compris.
+    check: str = ""
+    # Les notions abordées — la prise pour accrocher un jour une vidéo de
+    # démonstration par concept.
+    concepts: List[str] = []
+    citations: List[TutorCitation] = []
     queries: List[Dict[str, Any]] = []
     warnings: List[str] = []
     error: Optional[str] = None
