@@ -256,8 +256,15 @@ class IndexRepository:
                   AND ($7::text IS NULL OR d.course_id = $7::text)
                   AND ($8::text IS NULL OR d.role = $8::text)
                   AND ($9::text[] IS NULL OR d.external_id = ANY($9::text[]))
+                  -- La série et le niveau ne filtrent que si le périmètre
+                  -- les porte : le programme de la première S1 ne doit
+                  -- jamais nourrir un cours de première S2 — mais les
+                  -- documents indexés avant ces colonnes (série vide)
+                  -- restent trouvables par un périmètre sans série.
+                  AND ($10::text = '' OR d.level = $10)
+                  AND ($11::text = '' OR d.track = $11)
                 ORDER BY c.embedding <=> $1::vector
-                LIMIT $10
+                LIMIT $12
                 """,
                 to_vector_literal(embedding),
                 scope.country, scope.subject, scope.grade,
@@ -265,6 +272,7 @@ class IndexRepository:
                 course_id,
                 role,
                 list(document_ids) if document_ids else None,
+                scope.level, scope.track,
                 limit,
             )
         ]

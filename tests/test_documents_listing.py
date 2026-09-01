@@ -67,3 +67,21 @@ def test_count_applique_les_memes_filtres():
     sql, args = pool.queries[0]
     assert "level = $6" in sql and "track = $7" in sql and "role = $8" in sql
     assert args[5:8] == ("secondaire", "S2", "support-cours")
+
+
+def test_la_recherche_filtre_par_niveau_et_serie():
+    """Le programme de la première S1 ne doit jamais nourrir un cours de
+    première S2 — la série du périmètre filtre la recherche. Vide, elle ne
+    filtre pas : les documents d'avant ces colonnes restent trouvables."""
+
+    pool = _RecordingPool()
+    repo = IndexRepository(pool)
+    asyncio.run(repo.search(
+        embedding=[0.0] * 4,
+        scope=_scope(level="secondaire", track="S2"),
+        limit=5,
+    ))
+    sql, args = pool.queries[0]
+    assert "($10::text = '' OR d.level = $10)" in sql
+    assert "($11::text = '' OR d.track = $11)" in sql
+    assert args[9] == "secondaire" and args[10] == "S2"
