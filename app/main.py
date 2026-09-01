@@ -25,6 +25,7 @@ from app.api import (
     routes_health,
     routes_index,
     routes_search,
+    routes_speech,
 )
 from app.config import get_settings
 from app.core.embeddings import build_embedding_provider
@@ -33,6 +34,7 @@ from app.db.engine import Database
 from app.core.jobs import JobStore
 from app.core.llm import build_llm_provider
 from app.core.retrieval import Retriever
+from app.core.speech import SpeechEngine
 from app.db.repository import IndexRepository
 
 logger = logging.getLogger(__name__)
@@ -61,6 +63,9 @@ async def lifespan(app: FastAPI):
     # l'instanciait, et les tests exerçaient le générateur sans passer par
     # l'application.
     app.state.llm = build_llm_provider(settings, client)
+    # La voix des cours. Chargée au premier appel, pas au démarrage : un
+    # service dont la voix manque doit quand même extraire et indexer.
+    app.state.speech = SpeechEngine(settings.piper_voice_path)
     app.state.retriever = Retriever(
         embeddings=embeddings, repository=app.state.repository
     )
@@ -95,6 +100,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_documents.router)
     app.include_router(routes_search.router)
     app.include_router(routes_generate.router)
+    app.include_router(routes_speech.router)
 
     @app.exception_handler(Exception)
     async def unhandled(request, exc):  # noqa: ANN001, ARG001

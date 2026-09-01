@@ -69,6 +69,13 @@ class Settings(BaseSettings):
     generation_output_tokens: int = Field(default=1_200, ge=128, le=8_192)
     inference_max_attempts: int = Field(default=3, ge=1, le=10)
 
+    # --- Synthèse vocale ----------------------------------------------------------
+    # La voix choisie à l'oreille par Alioune sur trois échantillons
+    # (31/08/2026). Le fichier .onnx est téléchargé au build de l'image ;
+    # s'il manque, /speech répond 503 SPEECH_BACKEND_UNAVAILABLE — le reste
+    # du service n'est pas concerné.
+    piper_voice_path: str = "voices/fr_FR-siwis-medium.onnx"
+
     # --- Chunking -----------------------------------------------------------------
     chunk_max_tokens: int = Field(default=384, ge=64, le=2048)
     chunk_overlap_tokens: int = Field(default=64, ge=0, le=512)

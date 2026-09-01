@@ -24,3 +24,6 @@ tiktoken==0.13.0
 
 # Réécriture de la CMap /ToUnicode : corriger la police, pas le texte.
 pypdf==6.2.0
+
+# La voix des cours — synthèse locale sur CPU, aucun service extérieur.
+piper-tts==1.7.0

@@ -390,6 +390,39 @@ class GenerateStatus(Wire):
     error: Optional[str] = None
 
 
+# ---------------------------------------------------------------------- speech
+
+
+class SpeechRequest(Wire):
+    request_id: str
+    # Pour les journaux et le suivi — le rag ne vérifie pas le statut du
+    # cours : la garde « cours publié seulement » vit côté plateforme.
+    course_id: str = ""
+    # Le texte du cours tel que validé (marqueurs compris) : la verbalisation
+    # — formules dites en français, marqueurs retirés — se fait ici.
+    text: str = Field(min_length=1, max_length=400_000)
+
+
+class SpeechAccepted(Wire):
+    contract_version: Literal["1.0"] = CONTRACT_VERSION
+    request_id: str
+    job_id: str
+    status: Literal["running"] = "running"
+
+
+class SpeechStatus(Wire):
+    contract_version: Literal["1.0"] = CONTRACT_VERSION
+    job_id: str
+    status: Literal["running", "done", "failed"]
+    # mp3 (mono 64 kbit/s) en temps normal ; wav si ffmpeg manque — le champ
+    # format fait foi, l'appelant stocke tel quel.
+    format: Optional[str] = None
+    audio_base64: Optional[str] = None
+    seconds: Optional[float] = None
+    characters: Optional[int] = None
+    error: Optional[str] = None
+
+
 # ------------------------------------------------------------------- documents
 
 
