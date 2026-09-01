@@ -237,6 +237,8 @@ class CourseGenerator:
             # on les laisse visibles et on prévient, plutôt que de les fondre
             # silencieusement dans le cours.
             warnings.append("ADDITIONS_IN_GROUNDED_MODE")
+        if strictness == "grounded" and any(not s.citations for s in sections):
+            warnings.append("GROUNDED_TEXT_WITHOUT_CITATIONS")
 
         return GeneratedCourse(
             title=title, sections=sections, queries=queries, warnings=warnings
@@ -679,6 +681,12 @@ class CourseGenerator:
         )
         if strictness == "grounded" and section.has_additions:
             warnings.append("ADDITIONS_IN_GROUNDED_MODE")
+        if strictness == "grounded" and not section.citations:
+            # Constaté au premier test serveur (01/09/2026) : le modèle a
+            # rendu un texte plausible SANS une seule étiquette [S]/[P] —
+            # donc invérifiable, en silence. Le professeur doit le savoir :
+            # un texte non sourcé en mode grounded se relit en entier.
+            warnings.append("GROUNDED_TEXT_WITHOUT_CITATIONS")
         return GeneratedCourse(
             title=heading, sections=[section], queries=queries, warnings=warnings
         )

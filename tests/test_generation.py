@@ -412,3 +412,16 @@ def test_le_ton_professionnel_est_impose_partout():
         instruction="cours", scope=SCOPE, course_id="c"))
     assert "professionnel et mature" in _TONE
     assert _TONE.strip(" ") in llm.exchanges[0][0]["content"]
+
+
+def test_un_texte_grounded_sans_citation_est_signale():
+    """Constaté au premier test serveur : un texte plausible sans une seule
+    étiquette [S]/[P] — invérifiable, en silence. Le prof doit le savoir."""
+
+    plan = json.dumps({"titre": "T", "sections": ["Définition"]})
+    llm = ScriptedLlm([plan, "Un texte plausible sans aucune étiquette."])
+
+    course = asyncio.run(_generator(llm).generate(
+        instruction="cours", scope=SCOPE, course_id="c", strictness="grounded"))
+
+    assert "GROUNDED_TEXT_WITHOUT_CITATIONS" in course.warnings
