@@ -94,6 +94,16 @@ class GeneratedCourse:
     warnings: List[str] = field(default_factory=list)
 
 
+# Le ton exigé partout — plan, sections, révisions : celui d'un enseignant
+# expérimenté. Demandé explicitement par Alioune (01/09/2026) : le résultat
+# doit être professionnel et mature, jamais du remplissage.
+_TONE = (
+    " Ton : professionnel et mature, celui d'un enseignant expérimenté — "
+    "précis, rigoureux, sobre. Pas de remplissage, pas de familiarité, "
+    "pas d'enthousiasme artificiel."
+)
+
+
 def _context_line(scope: Scope) -> str:
     """Dire au modèle pour qui il écrit.
 
@@ -370,6 +380,7 @@ class CourseGenerator:
                     "content": (
                         "Un professeur demande une révision de son cours. "
                         + _context_line(scope)
+                        + _TONE
                         + " Réponds UNIQUEMENT en JSON : "
                         '{"titre": "...", "operations": [{"action": '
                         '"reecrire"|"ajouter"|"supprimer", "section": '
@@ -457,6 +468,22 @@ class CourseGenerator:
         if not frame:
             warnings.append("NO_OFFICIAL_CURRICULUM_IN_SCOPE")
 
+        # Le plan se construit aussi sur ce que le professeur a réellement
+        # déposé : un plan fidèle au programme mais aveugle aux supports
+        # annoncerait des parties que les documents ne portent pas.
+        supports = await self._retriever.search(
+            query=instruction,
+            scope=scope,
+            limit=5,
+            max_excerpt_characters=600,
+            course_id=course_id,
+            role="support-cours",
+        )
+        queries.append(
+            {"question": instruction, "nature": "support-cours",
+             "demandeParLeModele": False, "resultats": len(supports)}
+        )
+
         revision = ""
         if current_plan and request:
             lines = []
@@ -487,6 +514,7 @@ class CourseGenerator:
                     "content": (
                         "Tu prépares le plan d'un cours pour un professeur. "
                         + _context_line(scope)
+                        + _TONE
                         + ' Réponds UNIQUEMENT en JSON : {"titre": "...", '
                         '"description": "deux phrases sur ce que le cours '
                         'couvrira", "parties": [{"titre": "...", '
@@ -513,6 +541,10 @@ class CourseGenerator:
                         f"Demande du professeur : {instruction}\n\n"
                         "Extraits du programme officiel :\n\n"
                         + _render_passages(frame, "P", 1)
+                        + "\n\nExtraits des documents déposés par le "
+                        "professeur (le plan doit couvrir ce qu'ils "
+                        "traitent) :\n\n"
+                        + (_render_passages(supports, "S", 1) or "(aucun)")
                         + revision
                     ),
                 },
@@ -727,12 +759,17 @@ class CourseGenerator:
                 "content": (
                     "Tu rédiges une section d'un cours pour des élèves. "
                     + _context_line(scope)
+                    + _TONE
                     + f" {rules}\n"
-                    "Si les extraits ne suffisent pas, tu peux demander une "
-                    "recherche en répondant UNIQUEMENT : "
+                    "AVANT de rédiger, assure-toi d'avoir tous les éléments : "
+                    "définitions exactes, formules, exemples. Demande autant "
+                    "de recherches que nécessaire — ne te contente jamais des "
+                    "premiers extraits s'il te manque quelque chose — en "
+                    "répondant UNIQUEMENT : "
                     '{"chercher": {"question": "...", "nature": '
                     '"support-cours"}} (ou "programme-officiel"). '
-                    "Sinon, rédige la section — texte seulement, sans JSON."
+                    "Quand tu as assez d'éléments, rédige la section — texte "
+                    "seulement, sans JSON."
                 ),
             },
             {
@@ -749,7 +786,9 @@ class CourseGenerator:
         ]
 
         text = ""
-        for _round in range(4):
+        # Six allers-retours de recherche par section : la qualité passe
+        # avant l'économie d'appels — le plafond global reste le budget.
+        for _round in range(6):
             raw = await self._chat(messages)
             wanted = _wants_search(raw)
             if wanted is None:

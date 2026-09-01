@@ -276,9 +276,12 @@ def test_le_plan_se_propose_avec_resumes_sans_rediger_une_ligne():
     assert draft.items[0].children == []
     assert draft.items[1].children == [
         "Définition par le projeté orthogonal", "Propriétés de calcul", "Exercices"]
-    # Un seul appel modèle, une seule recherche : le plan ne coûte presque rien.
+    # Un seul appel modèle ; deux recherches — le programme donne le cadre,
+    # les supports déposés disent ce que le plan doit réellement couvrir.
     assert len(llm.exchanges) == 1
     assert retriever.calls[0]["role"] == "programme-officiel"
+    assert retriever.calls[1]["role"] == "support-cours"
+    assert retriever.calls[1]["course_id"] == "c"
 
 
 def test_le_plan_se_revise_en_conversation():
@@ -393,3 +396,19 @@ def test_le_prompt_du_plan_impose_le_ton_impersonnel():
     consigne = llm.exchanges[0][0]["content"]
     assert "IMPERSONNELLE" in consigne
     assert "Définition du produit scalaire" in consigne
+
+
+def test_le_ton_professionnel_est_impose_partout():
+    """Exigence d'Alioune (01/09/2026) : plan, sections et révisions parlent
+    comme un enseignant expérimenté, et la rédaction est incitée à chercher
+    autant que nécessaire avant d'écrire."""
+
+    from app.core.generation import _TONE
+
+    plan = json.dumps({"titre": "T", "parties": [
+        {"titre": "A", "description": "Définition.", "sousParties": []}]})
+    llm = ScriptedLlm([plan])
+    asyncio.run(_generator(llm).draft_plan(
+        instruction="cours", scope=SCOPE, course_id="c"))
+    assert "professionnel et mature" in _TONE
+    assert _TONE.strip(" ") in llm.exchanges[0][0]["content"]
