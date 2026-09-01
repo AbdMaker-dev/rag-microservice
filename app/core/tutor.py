@@ -23,11 +23,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Callable, List, Optional
+from typing import List, Optional
 
 from app.config import Settings
 from app.core.generation import (
-    GenerationFailed,
     _context_line,
     _parse_json_block,
     _render_passages,
@@ -101,6 +100,7 @@ class Tutor:
         question: str,
         scope: Scope,
         course_id: str,
+        section_heading: str = "",
         history: Optional[List[dict]] = None,
     ) -> TutorAnswer:
         queries: List[dict] = []
@@ -139,12 +139,15 @@ class Tutor:
             return len(fresh)
 
         # Le premier réflexe : le cours publié — c'est ce que l'élève lit.
-        found = await search(question, "cours-publie", from_model=False)
+        # Une question posée depuis une section se cherche dans son contexte :
+        # « la norme » ne veut pas dire la même chose selon le chapitre.
+        probe = f"{section_heading} — {question}" if section_heading else question
+        found = await search(probe, "cours-publie", from_model=False)
         if found == 0:
             warnings.append("NO_PUBLISHED_COURSE_CONTENT")
             # Le cours est un résumé court : l'approfondissement vit dans
             # les supports. On les consulte d'office si le cours se tait.
-            await search(question, "support-cours", from_model=False)
+            await search(probe, "support-cours", from_model=False)
 
         if not passages:
             # Rien de validé ne couvre la question : réponse honnête, sans
@@ -172,11 +175,17 @@ class Tutor:
         for turn in history or []:
             role = "assistant" if turn.get("role") == "lawal" else "user"
             messages.append({"role": role, "content": str(turn.get("content", ""))})
+        situation = (
+            f"L'élève lit la section « {section_heading} » du cours.\n"
+            if section_heading
+            else ""
+        )
         messages.append(
             {
                 "role": "user",
                 "content": (
-                    f"Question de l'élève : {question}\n\n"
+                    situation
+                    + f"Question de l'élève : {question}\n\n"
                     "Extraits validés :\n\n"
                     + _render_passages(passages, "S", 1)
                 ),

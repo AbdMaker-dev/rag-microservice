@@ -121,6 +121,24 @@ def test_le_modele_peut_demander_une_recherche_de_plus():
     assert len(answer.citations) == 2
 
 
+def test_une_question_de_section_se_cherche_dans_son_contexte():
+    # « La norme » ne veut pas dire la même chose selon le chapitre : la
+    # section d'où parle l'élève guide la recherche ET la réponse.
+    retriever = _Retriever({"cours-publie": [_passage()]})
+    llm = _Llm([json.dumps({"reponse": "Ici [S1].", "verification": "?"})])
+    tutor = Tutor(llm=llm, retriever=retriever, settings=_settings())
+    asyncio.run(tutor.answer(
+        question="C'est quoi la norme ?", scope=_scope(), course_id="cours-7",
+        section_heading="II-2) Produit scalaire et orthogonalité",
+    ))
+    assert retriever.calls[0]["query"] == (
+        "II-2) Produit scalaire et orthogonalité — C'est quoi la norme ?"
+    )
+    assert "L'élève lit la section « II-2) Produit scalaire" in (
+        llm.messages_seen[0][-1]["content"]
+    )
+
+
 def test_l_historique_du_fil_revient_dans_la_conversation():
     retriever = _Retriever({"cours-publie": [_passage()]})
     llm = _Llm([json.dumps({"reponse": "Suite [S1].", "verification": "?"})])

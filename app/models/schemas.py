@@ -411,6 +411,10 @@ class AnswerRequest(Wire):
     # lui qui adapte le niveau de langue (classe) et verrouille le pays.
     scope: Scope
     question: str = Field(min_length=1, max_length=2_000)
+    # L'élève peut interroger le cours globalement ou UNE section : quand la
+    # question part d'une section, son titre arrive ici — Lawal cherche et
+    # répond dans ce contexte. Vide = question sur le cours entier.
+    section_heading: str = Field(default="", max_length=300)
     history: List[TutorTurn] = Field(default_factory=list, max_length=20)
 
 

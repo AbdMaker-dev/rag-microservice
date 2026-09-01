@@ -34,6 +34,7 @@ async def answer(body: AnswerRequest, request: Request) -> AnswerAccepted:
             question=body.question,
             scope=body.scope,
             course_id=body.course_id,
+            section_heading=body.section_heading,
             history=[turn.model_dump() for turn in body.history],
         )
         logger.info(
