@@ -194,6 +194,7 @@ class Tutor:
             }
         )
 
+        format_reminded = False
         for _ in range(self._settings.answer_max_queries + 1):
             raw = await self._chat(messages)
             wanted = _wants_tutor_search(raw)
@@ -228,7 +229,24 @@ class Tutor:
                     queries=queries,
                     warnings=warnings,
                 )
-            # Réponse hors format : on la refuse une fois, puis on échoue.
+            # Réponse hors format. Une seule relance pour le format ; ensuite
+            # le texte libre est ACCEPTÉ tel quel — constaté au premier test
+            # réel (02/09/2026) : qwen répondait une bonne explication en
+            # prose, et l'élève recevait un échec après 4 minutes. Une bonne
+            # réponse sans question de vérification vaut mieux que pas de
+            # réponse du tout.
+            plain = raw.strip().strip("`").strip()
+            if format_reminded and len(plain) > 80:
+                warnings.append("TUTOR_PLAIN_TEXT")
+                return TutorAnswer(
+                    text=plain,
+                    check="",
+                    concepts=[],
+                    citations=_citations(passages),
+                    queries=queries,
+                    warnings=warnings,
+                )
+            format_reminded = True
             messages.append({"role": "assistant", "content": raw})
             messages.append(
                 {

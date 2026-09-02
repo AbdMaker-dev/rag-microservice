@@ -178,3 +178,23 @@ def test_le_tuteur_est_branche_dans_l_application():
     from app import main
 
     assert "app.state.tutor = Tutor(" in inspect.getsource(main)
+
+
+def test_une_bonne_reponse_en_prose_est_acceptee_apres_une_relance():
+    """Constaté au premier test réel : qwen expliquait bien, mais en prose —
+    et l'élève recevait un échec après 4 minutes. Une relance pour le
+    format, puis le texte libre est accepté tel quel."""
+
+    retriever = _Retriever({"cours-publie": [_passage()]})
+    prose = ("Le centre d'une similitude directe est l'unique point invariant. "
+             "Pour le trouver, on résout z = az + b, ce qui donne ω = b/(1−a).")
+    llm = _Llm([prose, prose])
+    tutor = Tutor(llm=llm, retriever=retriever, settings=_settings())
+    answer = asyncio.run(tutor.answer(
+        question="Comment trouver le centre ?", scope=_scope(), course_id="cours-7",
+    ))
+    assert "point invariant" in answer.text
+    assert "TUTOR_PLAIN_TEXT" in answer.warnings
+    assert answer.check == ""
+    # la relance a bien eu lieu : deux appels au modèle
+    assert len(llm.messages_seen) == 2
