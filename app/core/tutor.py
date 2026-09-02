@@ -21,6 +21,7 @@ conserve.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
 from typing import List, Optional
@@ -216,6 +217,10 @@ class Tutor:
                 )
                 continue
             parsed = _parse_json_block(raw)
+            if not (parsed and str(parsed.get("reponse", "")).strip()):
+                # qwen émet parfois {"reponse":…} PUIS {"verification":…} :
+                # deux objets côte à côte — on les fusionne avant d'abandonner.
+                parsed = _merge_json_blocks(raw)
             if parsed and str(parsed.get("reponse", "")).strip():
                 return TutorAnswer(
                     text=str(parsed["reponse"]).strip(),
@@ -273,6 +278,47 @@ class Tutor:
             num_ctx=self._settings.generation_context_tokens,
             num_predict=self._settings.answer_output_tokens,
         )
+
+
+def _merge_json_blocks(raw: str) -> dict:
+    """Fusionner tous les objets JSON équilibrés d'une réponse.
+
+    Vu au premier test réel : qwen émet parfois {"reponse": …} PUIS
+    {"verification": …} — deux objets côte à côte. Le découpage naïf
+    premier-{ / dernier-} produisait un JSON invalide et l'élève recevait
+    les accolades brutes. Ici chaque bloc équilibré est lu, les champs se
+    cumulent.
+    """
+
+    merged: dict = {}
+    depth, start = 0, None
+    in_string, escape = False, False
+    for index, char in enumerate(raw):
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            if depth == 0:
+                start = index
+            depth += 1
+        elif char == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and start is not None:
+                try:
+                    block = json.loads(raw[start : index + 1])
+                    if isinstance(block, dict):
+                        merged.update(block)
+                except json.JSONDecodeError:
+                    pass
+                start = None
+    return merged
 
 
 def _wants_tutor_search(raw: str):

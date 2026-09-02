@@ -198,3 +198,19 @@ def test_une_bonne_reponse_en_prose_est_acceptee_apres_une_relance():
     assert answer.check == ""
     # la relance a bien eu lieu : deux appels au modèle
     assert len(llm.messages_seen) == 2
+
+
+def test_deux_objets_json_cote_a_cote_sont_fusionnes():
+    """Vu au premier test réel : {"reponse": …} PUIS {"verification": …} —
+    l'élève recevait les accolades brutes. Les blocs se fusionnent."""
+
+    retriever = _Retriever({"cours-publie": [_passage()]})
+    raw = ('{"reponse": "Le centre est le point invariant [S1]."}\n\n'
+           '{"verification": "Sauras-tu le retrouver ?"}')
+    tutor = Tutor(llm=_Llm([raw]), retriever=retriever, settings=_settings())
+    answer = asyncio.run(tutor.answer(
+        question="Le centre ?", scope=_scope(), course_id="cours-7",
+    ))
+    assert answer.text == "Le centre est le point invariant [S1]."
+    assert answer.check == "Sauras-tu le retrouver ?"
+    assert "TUTOR_PLAIN_TEXT" not in answer.warnings
