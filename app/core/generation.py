@@ -142,6 +142,42 @@ _BLOCK_SCHEMAS = {
 
 
 @dataclass(frozen=True)
+class AssessmentResult:
+    """Une épreuve : devoir, composition ou examen blanc."""
+
+    kind: str
+    title: str
+    instructions: str
+    duration_minutes: int
+    total_points: int
+    exercises: List[dict] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+
+
+_ASSESSMENT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "titre": {"type": "string"},
+        "consignes": {"type": "string"},
+        "exercices": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "enonce": {"type": "string"},
+                    "corrige": {"type": "string"},
+                    "points": {"type": "integer", "minimum": 1},
+                    "couvre": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["enonce", "corrige", "points"],
+            },
+        },
+    },
+    "required": ["titre", "exercices"],
+}
+
+
+@dataclass(frozen=True)
 class BlocksDraft:
     """Un des trois blocs d'un cours, produit depuis son contenu validé."""
 
@@ -298,6 +334,26 @@ def _render_passages(passages: List[Passage], prefix: str, start: int) -> str:
             f"{label} ({passage.title} — {passage.locator})\n{passage.content}"
         )
     return "\n\n".join(lines)
+
+
+def _rebalance_points(exercises: List[dict], total: int) -> List[dict]:
+    """Ramener la somme des points au barème annoncé, proportionnellement.
+
+    Le modèle annonce « sur 20 » et distribue 23 : le professeur corrigerait
+    à la main à chaque fois. On répartit au prorata, chaque exercice gardant
+    au moins un point, et le reliquat va au premier.
+    """
+
+    awarded = sum(exercise["points"] for exercise in exercises) or 1
+    rebalanced = []
+    for exercise in exercises:
+        share = max(1, round(exercise["points"] * total / awarded))
+        rebalanced.append({**exercise, "points": share})
+    drift = total - sum(exercise["points"] for exercise in rebalanced)
+    if drift and rebalanced:
+        first = rebalanced[0]
+        rebalanced[0] = {**first, "points": max(1, first["points"] + drift)}
+    return rebalanced
 
 
 class CourseGenerator:
@@ -1152,6 +1208,143 @@ class CourseGenerator:
         if not exercises:
             raise GenerationFailed("aucun exercice exploitable : relancer")
         return BlocksDraft(kind=kind, exercises=exercises[:count], warnings=warnings)
+
+    async def compose_assessment(
+        self,
+        *,
+        kind: str,
+        sources: List[dict],
+        scope: Scope,
+        title: str = "",
+        duration_minutes: int = 60,
+        total_points: int = 20,
+        exercise_count: int = 3,
+        instruction: str = "",
+    ) -> AssessmentResult:
+        """Un devoir, une composition ou un examen blanc sur PLUSIEURS cours.
+
+        Un devoir porte sur les quelques cours que le professeur désigne ;
+        une composition couvre un semestre. La matière première est le
+        contenu validé de ces cours — en pratique leurs résumés, qui
+        tiennent dans la fenêtre du modèle là où les cours entiers ne
+        tiendraient pas. Rien n'est demandé qui ne soit dans ces cours : une
+        épreuve qui sort du couvert est un piège, pas une évaluation.
+        """
+
+        libelle = {
+            "devoir": "un DEVOIR",
+            "composition": "une COMPOSITION",
+            "examen-blanc": "un EXAMEN BLANC",
+        }.get(kind, "un DEVOIR")
+
+        corpus = "\n\n".join(
+            f"### COURS {index} — {source['heading']}\n{source['text']}"
+            for index, source in enumerate(sources, start=1)
+        )
+        headings = [source["heading"] for source in sources]
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    f"Tu composes {libelle} pour des élèves. "
+                    + _context_line(scope)
+                    + _TONE
+                    + f" Durée : {duration_minutes} minutes. Barème total : "
+                    f"{total_points} points, à répartir entre les exercices "
+                    f"(la somme doit faire {total_points}). "
+                    f"{exercise_count} exercices, de difficulté progressive, "
+                    "couvrant l'ENSEMBLE des cours fournis — chacun avec son "
+                    "corrigé détaillé et son barème. N'utilise QUE ce que ces "
+                    "cours enseignent. Indique pour chaque exercice le ou les "
+                    "cours qu'il couvre, par leur titre exact. Réponds "
+                    'UNIQUEMENT en JSON : {"titre": "...", "consignes": '
+                    '"...", "exercices": [{"enonce": "...", "corrige": "...", '
+                    '"points": 5, "couvre": ["titre du cours"]}]}'
+                    + (f" Consigne du professeur : {instruction}" if instruction else "")
+                ),
+            },
+            {"role": "user", "content": f"LES COURS COUVERTS :\n\n{corpus}"},
+        ]
+
+        parsed = None
+        for attempt in range(2):
+            raw = await self._chat(
+                messages,
+                num_predict=max(self._settings.generation_output_tokens, 4000),
+                schema=_ASSESSMENT_SCHEMA,
+            )
+            parsed = _parse_json_block(raw)
+            if parsed and parsed.get("exercices"):
+                break
+            messages.append({"role": "assistant", "content": raw})
+            messages.append(
+                {"role": "user", "content": "Réponds uniquement avec le JSON demandé."}
+            )
+        if not parsed or not parsed.get("exercices"):
+            raise GenerationFailed(
+                f"le modèle n'a pas produit {libelle} exploitable : relancer"
+            )
+
+        warnings: List[str] = []
+        exercises: List[dict] = []
+        dropped = 0
+        for entry in parsed.get("exercices") or []:
+            if not isinstance(entry, dict):
+                dropped += 1
+                continue
+            statement = str(entry.get("enonce") or "").strip()
+            solution = str(entry.get("corrige") or "").strip()
+            try:
+                points = int(entry.get("points") or 0)
+            except (TypeError, ValueError):
+                points = 0
+            if not statement or not solution or points <= 0:
+                dropped += 1
+                continue
+            covers = [
+                str(c).strip()
+                for c in (entry.get("couvre") or [])
+                if str(c).strip() in headings
+            ]
+            exercises.append(
+                {
+                    "statement": statement,
+                    "solution": solution,
+                    "points": points,
+                    "covers": covers,
+                }
+            )
+        if dropped:
+            warnings.append("ASSESSMENT_ITEMS_DROPPED")
+        if not exercises:
+            raise GenerationFailed("aucun exercice d'épreuve exploitable : relancer")
+
+        # Le barème doit tomber juste : un devoir sur 23 points n'existe pas.
+        awarded = sum(exercise["points"] for exercise in exercises)
+        if awarded != total_points:
+            warnings.append("ASSESSMENT_POINTS_ADJUSTED")
+            logger.info(
+                "barème rectifié",
+                extra={"annonce": total_points, "somme": awarded},
+            )
+            exercises = _rebalance_points(exercises, total_points)
+
+        # Un cours désigné par le prof mais couvert par aucun exercice :
+        # l'épreuve est incomplète, il doit le savoir avant de valider.
+        covered = {heading for exercise in exercises for heading in exercise["covers"]}
+        if any(heading not in covered for heading in headings):
+            warnings.append("ASSESSMENT_COURSE_NOT_COVERED")
+
+        return AssessmentResult(
+            kind=kind,
+            title=str(parsed.get("titre") or title or "").strip() or libelle.capitalize(),
+            instructions=str(parsed.get("consignes") or "").strip(),
+            duration_minutes=duration_minutes,
+            total_points=total_points,
+            exercises=exercises,
+            warnings=warnings,
+        )
 
     async def _chat(
         self,

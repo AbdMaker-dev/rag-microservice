@@ -399,6 +399,56 @@ class Exercise(Wire):
     difficulty: Literal["facile", "moyen", "difficile"] = "moyen"
 
 
+AssessmentKind = Literal["devoir", "composition", "examen-blanc"]
+
+
+class AssessmentSource(Wire):
+    """Un cours couvert par l'épreuve — son titre et sa matière première.
+
+    Envoyer le RÉSUMÉ du cours plutôt que son texte entier : plusieurs cours
+    complets ne tiennent pas dans la fenêtre du modèle, et le résumé a été
+    produit puis validé pour exactement cet usage.
+    """
+
+    heading: str = Field(min_length=1, max_length=500)
+    text: str = Field(min_length=20, max_length=20_000)
+
+
+class AssessmentRequest(Wire):
+    """Un devoir, une composition ou un examen blanc sur PLUSIEURS cours.
+
+    Le prof compose : quels cours, combien de temps, sur combien de points.
+    Il relit et valide ensuite, comme tout le reste.
+    """
+
+    request_id: str
+    course_id: str = Field(default="", max_length=255)
+    scope: Scope
+    kind: AssessmentKind
+    title: str = Field(default="", max_length=300)
+    sources: List[AssessmentSource] = Field(min_length=1, max_length=12)
+    duration_minutes: int = Field(default=60, ge=10, le=300)
+    total_points: int = Field(default=20, ge=5, le=100)
+    exercise_count: int = Field(default=3, ge=1, le=10)
+    instruction: str = Field(default="", max_length=2000)
+
+
+class AssessmentExercise(Wire):
+    statement: str
+    solution: str
+    points: int
+    # Les cours d'où sort l'exercice — le prof voit la couverture.
+    covers: List[str] = []
+
+
+class AssessmentDraft(Wire):
+    title: str
+    instructions: str = ""
+    duration_minutes: int = 60
+    total_points: int = 20
+    exercises: List[AssessmentExercise] = []
+
+
 class GenerateAccepted(Wire):
     contract_version: Literal["1.0"] = CONTRACT_VERSION
     request_id: str
@@ -429,8 +479,10 @@ class GenerateStatus(Wire):
     # toujours comment un cours a été construit.
     queries: List[Dict[str, Any]] = []
     # Rendus par /generate/blocks selon le bloc demandé.
-    kind: Optional[BlockKind] = None
+    kind: Optional[str] = None
     summary: Optional[str] = None
+    # Rendu par /generate/assessment.
+    assessment: Optional[AssessmentDraft] = None
     quiz: List[QuizQuestion] = []
     exercises: List[Exercise] = []
     warnings: List[str] = []

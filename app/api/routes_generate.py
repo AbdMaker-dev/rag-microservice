@@ -17,9 +17,18 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.api.dependencies import require_service_token
 from app.config import Settings, get_settings
-from app.core.generation import BlocksDraft, CourseGenerator, GeneratedCourse, PlanDraft
+from app.core.generation import (
+    AssessmentResult,
+    BlocksDraft,
+    CourseGenerator,
+    GeneratedCourse,
+    PlanDraft,
+)
 from app.models.schemas import (
     AdjustRequest,
+    AssessmentDraft,
+    AssessmentExercise,
+    AssessmentRequest,
     BlocksRequest,
     Exercise,
     QuizQuestion,
@@ -94,6 +103,22 @@ async def generation_status(job_id: str, request: Request) -> GenerateStatus:
             ],
             queries=plan.queries,
             warnings=plan.warnings,
+        )
+
+    if isinstance(job.result, AssessmentResult):
+        epreuve: AssessmentResult = job.result
+        return GenerateStatus(
+            job_id=job.id,
+            status="done",
+            kind=epreuve.kind,
+            assessment=AssessmentDraft(
+                title=epreuve.title,
+                instructions=epreuve.instructions,
+                duration_minutes=epreuve.duration_minutes,
+                total_points=epreuve.total_points,
+                exercises=[AssessmentExercise(**e) for e in epreuve.exercises],
+            ),
+            warnings=epreuve.warnings,
         )
 
     if isinstance(job.result, BlocksDraft):
@@ -273,5 +298,50 @@ async def blocks(
     logger.info(
         "bloc lancé",
         extra={"requestId": body.request_id, "job": job.id, "kind": body.kind},
+    )
+    return GenerateAccepted(request_id=body.request_id, job_id=job.id)
+
+
+@router.post(
+    "/generate/assessment",
+    response_model=GenerateAccepted,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def assessment(
+    body: AssessmentRequest,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+) -> GenerateAccepted:
+    """Un devoir, une composition ou un examen blanc sur PLUSIEURS cours.
+
+    Le professeur désigne les cours couverts, la durée et le barème ; il
+    relit et valide l'épreuve comme le reste. Statut sur GET /generate/{jobId}.
+    """
+
+    generator = CourseGenerator(
+        llm=request.app.state.llm,
+        retriever=request.app.state.retriever,
+        settings=settings,
+    )
+    job = request.app.state.jobs.submit(
+        lambda: generator.compose_assessment(
+            kind=body.kind,
+            sources=[source.model_dump() for source in body.sources],
+            scope=body.scope,
+            title=body.title,
+            duration_minutes=body.duration_minutes,
+            total_points=body.total_points,
+            exercise_count=body.exercise_count,
+            instruction=body.instruction,
+        )
+    )
+    logger.info(
+        "épreuve lancée",
+        extra={
+            "requestId": body.request_id,
+            "job": job.id,
+            "kind": body.kind,
+            "cours": len(body.sources),
+        },
     )
     return GenerateAccepted(request_id=body.request_id, job_id=job.id)
