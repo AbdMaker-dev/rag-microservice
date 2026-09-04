@@ -206,7 +206,8 @@ def _parse_json_block(raw: str) -> Optional[dict]:
     if merged:
         return merged
     logger.warning(
-        "réponse du modèle illisible en JSON", extra={"apercu": raw[:200]}
+        "réponse du modèle illisible en JSON",
+        extra={"debut": raw[:200], "fin": raw[-200:], "longueur": len(raw)},
     )
     return None
 
@@ -1004,8 +1005,16 @@ class CourseGenerator:
 
         warnings: List[str] = []
         parsed = None
+        # Constaté en production : 3 exercices corrigés dépassent 1 200
+        # tokens — le JSON sortait tronqué avant la dernière accolade, donc
+        # illisible. Les blocs à items ont droit à un plafond plus haut.
+        output_tokens = (
+            max(self._settings.generation_output_tokens, 3000)
+            if kind in ("exercices", "quiz")
+            else None
+        )
         for attempt in range(2):
-            raw = await self._chat(messages)
+            raw = await self._chat(messages, num_predict=output_tokens)
             parsed = _parse_json_block(raw)
             if parsed:
                 break
@@ -1080,7 +1089,9 @@ class CourseGenerator:
             raise GenerationFailed("aucun exercice exploitable : relancer")
         return BlocksDraft(kind=kind, exercises=exercises[:count], warnings=warnings)
 
-    async def _chat(self, messages: List[dict]) -> str:
+    async def _chat(
+        self, messages: List[dict], *, num_predict: Optional[int] = None
+    ) -> str:
         # Garde-fou de contexte : Ollama tronque SANS PRÉVENIR au-delà de
         # num_ctx — au pire, le prompt système saute et les règles avec. On
         # échoue clairement plutôt que de laisser rédiger sans les règles.
@@ -1094,5 +1105,5 @@ class CourseGenerator:
             messages,
             timeout=self._settings.generation_timeout_s,
             num_ctx=self._settings.generation_context_tokens,
-            num_predict=self._settings.generation_output_tokens,
+            num_predict=num_predict or self._settings.generation_output_tokens,
         )

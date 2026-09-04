@@ -157,3 +157,19 @@ def test_frac_et_theta_survivent_a_la_lecture_json():
     assert "\\frac{b}{1-a}" in parsed["q"]
     assert "\\theta" in parsed["q"]
     assert "ligne1\nligne2" in parsed["q"]
+
+
+def test_les_exercices_ont_un_plafond_de_sortie_plus_haut():
+    """3 exercices corrigés dépassaient 1 200 tokens : JSON tronqué."""
+
+    class Recording(ScriptedLlm):
+        def __init__(self, replies):
+            super().__init__(replies); self.predicts = []
+        async def chat(self, messages, *, timeout, num_ctx, num_predict):
+            self.predicts.append(num_predict)
+            return await super().chat(messages, timeout=timeout, num_ctx=num_ctx, num_predict=num_predict)
+
+    llm = Recording([json.dumps({"exercices": [{"enonce": "e", "corrige": "c"}]})])
+    gen = CourseGenerator(llm=llm, retriever=FakeRetriever(), settings=get_settings())
+    asyncio.run(gen.generate_blocks(kind="exercices", text=COURS, scope=SCOPE))
+    assert llm.predicts[0] >= 3000
