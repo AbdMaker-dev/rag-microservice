@@ -172,7 +172,9 @@ class ExtractResponse(Wire):
 
 # « cours-publie » : le contenu assemblé d'un cours publié, indexé par la
 # plateforme à la publication — c'est ce que le tuteur élève cite en premier.
-DocumentRole = Literal["support-cours", "programme-officiel", "cours-publie"]
+# « annale » : un sujet d'examen passé, commun au périmètre comme un programme
+# officiel — la matière première du futur coach examen.
+DocumentRole = Literal["support-cours", "programme-officiel", "cours-publie", "annale"]
 
 
 class IndexRequest(Wire):

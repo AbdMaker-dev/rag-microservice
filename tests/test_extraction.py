@@ -409,3 +409,26 @@ def test_la_route_search_transmet_vraiment_ses_filtres():
     signature = inspect.signature(Retriever.search)
     assert "course_id" in signature.parameters
     assert "role" in signature.parameters
+
+
+def test_une_annale_est_commune_au_perimetre_comme_un_programme():
+    """Un sujet d'examen passé n'appartient à aucun cours : rattaché à un
+    cours, il cesserait d'être la référence commune du périmètre."""
+
+    import base64
+
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+
+    client = TestClient(create_app())
+    token = {"X-Service-Token": "test-secret-value-of-at-least-32-chars"}
+    response = client.post("/index", headers=token, json={
+        "requestId": "r-a", "documentId": "bac-2024-maths-s2",
+        "title": "BAC 2024 — maths S2", "role": "annale", "courseId": "cours-7",
+        "scope": {"country": "SN", "subject": "maths", "level": "secondaire",
+                  "track": "S2", "grade": "terminale", "curriculumVersion": "2006"},
+        "text": "Exercice 1 : similitudes directes.",
+    })
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "OFFICIAL_CURRICULUM_HAS_NO_COURSE"

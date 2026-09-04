@@ -823,6 +823,30 @@ class CourseGenerator:
                 f"la section « {heading} » n'a pas été rédigée après 4 tours"
             )
 
+        if strictness == "grounded" and not _LABEL.search(text):
+            # Constaté en production (7 sections sur 8) : le modèle rédige
+            # sans une seule étiquette de source, donc invérifiable. Une
+            # relance ferme avant d'abandonner — le texte relancé porte des
+            # étiquettes dans la plupart des cas ; sinon le warning
+            # GROUNDED_TEXT_WITHOUT_CITATIONS reste et le prof relit tout.
+            messages.append({"role": "assistant", "content": text})
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "Ta rédaction ne porte AUCUNE étiquette de source. "
+                        "Réécris-la intégralement en faisant suivre chaque "
+                        "affirmation de l'étiquette de l'extrait qui la "
+                        "fonde — [S1], [P2]… — et en marquant [LACUNE: …] "
+                        "ce que les extraits ne couvrent pas. Texte "
+                        "seulement, sans JSON."
+                    ),
+                }
+            )
+            retried = (await self._chat(messages)).strip()
+            if _LABEL.search(retried):
+                text = retried
+
         cited = sorted(
             {label.strip("[]") for label in _LABEL.findall(text)}
         )

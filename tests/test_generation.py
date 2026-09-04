@@ -419,9 +419,40 @@ def test_un_texte_grounded_sans_citation_est_signale():
     étiquette [S]/[P] — invérifiable, en silence. Le prof doit le savoir."""
 
     plan = json.dumps({"titre": "T", "sections": ["Définition"]})
-    llm = ScriptedLlm([plan, "Un texte plausible sans aucune étiquette."])
+    # Deux réponses sans étiquette : la relance ferme échoue aussi.
+    llm = ScriptedLlm([plan, "Un texte plausible sans aucune étiquette.",
+                       "Encore sans étiquette."])
 
     course = asyncio.run(_generator(llm).generate(
         instruction="cours", scope=SCOPE, course_id="c", strictness="grounded"))
 
+    assert "GROUNDED_TEXT_WITHOUT_CITATIONS" in course.warnings
+
+
+def test_un_texte_grounded_sans_etiquette_est_relance_une_fois():
+    """7 sections sur 8 sorties sans étiquette en production : une relance
+    ferme, et le texte relancé (étiqueté) remplace le premier."""
+
+    plan = json.dumps({"titre": "T", "sections": ["Définition"]})
+    llm = ScriptedLlm([plan, "Un texte plausible sans étiquette.",
+                       "La définition [S1], cadrée par [P1]."])
+
+    course = asyncio.run(_generator(llm).generate(
+        instruction="cours", scope=SCOPE, course_id="c", strictness="grounded"))
+
+    assert course.sections[0].text.startswith("La définition [S1]")
+    assert len(course.sections[0].citations) == 2
+    assert "GROUNDED_TEXT_WITHOUT_CITATIONS" not in course.warnings
+    relance = llm.exchanges[-1][-1]["content"]
+    assert "AUCUNE étiquette" in relance
+
+
+def test_la_relance_qui_echoue_garde_le_texte_et_le_warning():
+    plan = json.dumps({"titre": "T", "sections": ["Définition"]})
+    llm = ScriptedLlm([plan, "Sans étiquette.", "Toujours sans étiquette."])
+
+    course = asyncio.run(_generator(llm).generate(
+        instruction="cours", scope=SCOPE, course_id="c", strictness="grounded"))
+
+    assert course.sections[0].text == "Sans étiquette."
     assert "GROUNDED_TEXT_WITHOUT_CITATIONS" in course.warnings

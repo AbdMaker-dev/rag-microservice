@@ -44,7 +44,7 @@ async def index(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={"code": "COURSE_ID_REQUIRED_FOR_COURSE_MATERIAL"},
         )
-    if body.role == "programme-officiel" and body.course_id:
+    if body.role in ("programme-officiel", "annale") and body.course_id:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={"code": "OFFICIAL_CURRICULUM_HAS_NO_COURSE"},
