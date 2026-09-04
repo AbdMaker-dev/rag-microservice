@@ -87,6 +87,17 @@ class PlanDraft:
 
 
 @dataclass(frozen=True)
+class BlocksDraft:
+    """Un des trois blocs d'un cours, produit depuis son contenu validé."""
+
+    kind: str
+    summary: str = ""
+    quiz: List[dict] = field(default_factory=list)
+    exercises: List[dict] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class GeneratedCourse:
     title: str
     sections: List[SectionDraft]
@@ -865,6 +876,143 @@ class CourseGenerator:
             citations=citations,
             has_additions=_ADDITION in text,
         )
+
+    async def generate_blocks(
+        self,
+        *,
+        kind: str,
+        text: str,
+        scope: Scope,
+        count: int = 5,
+        instruction: str = "",
+    ) -> BlocksDraft:
+        """Résumé, exercices ou quiz — depuis le contenu VALIDÉ du cours.
+
+        Pas de recherche ici : la matière première est le cours lui-même,
+        déjà relu par le professeur. Le bloc doit en découler strictement —
+        une question de quiz dont la réponse n'est pas dans le cours est une
+        question piège, pas une question d'entraînement. Le prof relit et
+        valide le bloc comme une section.
+        """
+
+        if kind == "resume":
+            demand = (
+                "Rédige le RÉSUMÉ de ce cours : 10 à 15 lignes, les idées "
+                "essentielles, les définitions et formules clés, dans l'ordre "
+                "du cours, style impersonnel. Rien qui ne soit dans le cours. "
+                'Réponds UNIQUEMENT en JSON : {"resume": "..."}'
+            )
+        elif kind == "quiz":
+            demand = (
+                f"Rédige un QUIZ de {count} questions à choix multiples sur ce "
+                "cours. Chaque question : exactement 4 propositions, UNE seule "
+                "juste, et la réponse doit se trouver dans le cours. Difficulté "
+                "progressive. Une explication courte par question (pourquoi "
+                "c'est la bonne réponse, en renvoyant au cours). Réponds "
+                'UNIQUEMENT en JSON : {"questions": [{"question": "...", '
+                '"choix": ["...", "...", "...", "..."], "reponse": 0, '
+                '"explication": "..."}]} — reponse est l\'index (0 à 3) de la '
+                "bonne proposition."
+            )
+        else:
+            demand = (
+                f"Rédige {count} EXERCICES d'entraînement sur ce cours, de "
+                "difficulté progressive (facile → difficile), chacun avec son "
+                "CORRIGÉ pas à pas. Les exercices ne mobilisent que ce que le "
+                "cours enseigne. Réponds UNIQUEMENT en JSON : "
+                '{"exercices": [{"enonce": "...", "corrige": "...", '
+                '"difficulte": "facile|moyen|difficile"}]}'
+            )
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Tu prépares le matériel d'entraînement d'un cours, pour "
+                    "des élèves. " + _context_line(scope) + _TONE + " " + demand
+                    + (f" Consigne du professeur : {instruction}" if instruction else "")
+                ),
+            },
+            {"role": "user", "content": f"LE COURS (validé par le professeur) :\n\n{text}"},
+        ]
+
+        warnings: List[str] = []
+        parsed = None
+        for attempt in range(2):
+            raw = await self._chat(messages)
+            parsed = _parse_json_block(raw)
+            if parsed:
+                break
+            messages.append({"role": "assistant", "content": raw})
+            messages.append(
+                {"role": "user", "content": "Réponds uniquement avec le JSON demandé."}
+            )
+        if not parsed:
+            raise GenerationFailed(
+                f"le modèle n'a pas produit de {kind} exploitable : relancer"
+            )
+
+        if kind == "resume":
+            summary = str(parsed.get("resume") or parsed.get("summary") or "").strip()
+            if not summary:
+                raise GenerationFailed("le résumé est vide : relancer")
+            return BlocksDraft(kind=kind, summary=summary, warnings=warnings)
+
+        if kind == "quiz":
+            questions: List[dict] = []
+            dropped = 0
+            for entry in parsed.get("questions") or []:
+                if not isinstance(entry, dict):
+                    dropped += 1
+                    continue
+                choices = [str(c).strip() for c in (entry.get("choix") or entry.get("choices") or [])]
+                answer = entry.get("reponse", entry.get("answer"))
+                question = str(entry.get("question", "")).strip()
+                try:
+                    answer = int(answer)
+                except (TypeError, ValueError):
+                    answer = -1
+                # Quatre propositions, une réponse dans la plage : sinon la
+                # question est inutilisable, on la retire et on le dit.
+                if not question or len(choices) != 4 or not (0 <= answer < 4):
+                    dropped += 1
+                    continue
+                questions.append(
+                    {
+                        "question": question,
+                        "choices": choices,
+                        "answer": answer,
+                        "explanation": str(entry.get("explication") or entry.get("explanation") or "").strip(),
+                    }
+                )
+            if dropped:
+                warnings.append("BLOCK_ITEMS_DROPPED")
+            if not questions:
+                raise GenerationFailed("aucune question de quiz exploitable : relancer")
+            return BlocksDraft(kind=kind, quiz=questions[:count], warnings=warnings)
+
+        exercises: List[dict] = []
+        dropped = 0
+        for entry in parsed.get("exercices") or parsed.get("exercises") or []:
+            if not isinstance(entry, dict):
+                dropped += 1
+                continue
+            statement = str(entry.get("enonce") or entry.get("statement") or "").strip()
+            solution = str(entry.get("corrige") or entry.get("solution") or "").strip()
+            difficulty = str(entry.get("difficulte") or entry.get("difficulty") or "moyen").strip().lower()
+            if difficulty not in ("facile", "moyen", "difficile"):
+                difficulty = "moyen"
+            if not statement or not solution:
+                dropped += 1
+                continue
+            exercises.append(
+                {"statement": statement, "solution": solution, "difficulty": difficulty}
+            )
+        if dropped:
+            warnings.append("BLOCK_ITEMS_DROPPED")
+        if not exercises:
+            raise GenerationFailed("aucun exercice exploitable : relancer")
+        return BlocksDraft(kind=kind, exercises=exercises[:count], warnings=warnings)
 
     async def _chat(self, messages: List[dict]) -> str:
         # Garde-fou de contexte : Ollama tronque SANS PRÉVENIR au-delà de

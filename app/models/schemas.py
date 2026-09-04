@@ -361,6 +361,44 @@ class SectionRequest(Wire):
     history: List[Dict[str, str]] = Field(default_factory=list, max_length=20)
 
 
+BlockKind = Literal["resume", "exercices", "quiz"]
+
+
+class BlocksRequest(Wire):
+    """Les trois blocs d'un cours — résumé, exercices, quiz — depuis son
+    contenu VALIDÉ. C'est le prof qui décide lesquels existent et lesquels
+    sont « demandés » à l'élève ; ici on ne fait que les produire, pour
+    qu'il les relise et les valide comme une section."""
+
+    request_id: str
+    course_id: str = Field(min_length=1, max_length=255)
+    scope: Scope
+    kind: BlockKind
+    # Le contenu validé du cours : une section, ou les sections assemblées.
+    text: str = Field(min_length=50, max_length=60_000)
+    # Nombre de questions / d'exercices souhaité.
+    count: int = Field(default=5, ge=1, le=20)
+    # Consigne du prof (« insiste sur les similitudes de rapport 1 »).
+    instruction: str = Field(default="", max_length=2000)
+
+
+class QuizQuestion(Wire):
+    question: str
+    # Toujours quatre propositions, une seule juste.
+    choices: List[str]
+    # Index (0-3) de la bonne réponse.
+    answer: int
+    # Pourquoi c'est la bonne — l'élève apprend aussi en se trompant.
+    explanation: str = ""
+
+
+class Exercise(Wire):
+    statement: str
+    # Corrigé pas à pas.
+    solution: str
+    difficulty: Literal["facile", "moyen", "difficile"] = "moyen"
+
+
 class GenerateAccepted(Wire):
     contract_version: Literal["1.0"] = CONTRACT_VERSION
     request_id: str
@@ -390,6 +428,11 @@ class GenerateStatus(Wire):
     # Les recherches que l'IA a faites pour construire le cours — on sait
     # toujours comment un cours a été construit.
     queries: List[Dict[str, Any]] = []
+    # Rendus par /generate/blocks selon le bloc demandé.
+    kind: Optional[BlockKind] = None
+    summary: Optional[str] = None
+    quiz: List[QuizQuestion] = []
+    exercises: List[Exercise] = []
     warnings: List[str] = []
     error: Optional[str] = None
 

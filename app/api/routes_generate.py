@@ -17,9 +17,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.api.dependencies import require_service_token
 from app.config import Settings, get_settings
-from app.core.generation import CourseGenerator, GeneratedCourse, PlanDraft
+from app.core.generation import BlocksDraft, CourseGenerator, GeneratedCourse, PlanDraft
 from app.models.schemas import (
     AdjustRequest,
+    BlocksRequest,
+    Exercise,
+    QuizQuestion,
     PlanChild,
     PlanItem,
     PlanRequest,
@@ -91,6 +94,18 @@ async def generation_status(job_id: str, request: Request) -> GenerateStatus:
             ],
             queries=plan.queries,
             warnings=plan.warnings,
+        )
+
+    if isinstance(job.result, BlocksDraft):
+        blocks: BlocksDraft = job.result
+        return GenerateStatus(
+            job_id=job.id,
+            status="done",
+            kind=blocks.kind,  # type: ignore[arg-type]
+            summary=blocks.summary or None,
+            quiz=[QuizQuestion(**q) for q in blocks.quiz],
+            exercises=[Exercise(**e) for e in blocks.exercises],
+            warnings=blocks.warnings,
         )
 
     course: GeneratedCourse = job.result  # type: ignore[assignment]
@@ -223,5 +238,40 @@ async def section(
     logger.info(
         "section lancée",
         extra={"requestId": body.request_id, "job": job.id, "heading": body.heading},
+    )
+    return GenerateAccepted(request_id=body.request_id, job_id=job.id)
+
+
+@router.post(
+    "/generate/blocks",
+    response_model=GenerateAccepted,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def blocks(
+    body: BlocksRequest,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+) -> GenerateAccepted:
+    """Les trois blocs d'un cours — résumé, exercices, quiz — depuis son
+    contenu validé. Un appel par bloc ; le prof relit et valide, comme une
+    section. Le statut se lit sur GET /generate/{jobId}."""
+
+    generator = CourseGenerator(
+        llm=request.app.state.llm,
+        retriever=request.app.state.retriever,
+        settings=settings,
+    )
+    job = request.app.state.jobs.submit(
+        lambda: generator.generate_blocks(
+            kind=body.kind,
+            text=body.text,
+            scope=body.scope,
+            count=body.count,
+            instruction=body.instruction,
+        )
+    )
+    logger.info(
+        "bloc lancé",
+        extra={"requestId": body.request_id, "job": job.id, "kind": body.kind},
     )
     return GenerateAccepted(request_id=body.request_id, job_id=job.id)
