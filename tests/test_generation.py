@@ -44,8 +44,10 @@ class ScriptedLlm:
     async def complete(self, system: str, user: str) -> str:
         raise AssertionError("la génération passe par chat()")
 
-    async def chat(self, messages, *, timeout, num_ctx, num_predict) -> str:
+    async def chat(self, messages, *, timeout, num_ctx, num_predict, schema=None) -> str:
         self.exchanges.append(list(messages))
+        self.schemas = getattr(self, "schemas", [])
+        self.schemas.append(schema)
         return self._replies.pop(0)
 
     async def healthy(self) -> bool:

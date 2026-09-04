@@ -86,6 +86,61 @@ class PlanDraft:
     warnings: List[str] = field(default_factory=list)
 
 
+# Sorties structurées : le modèle ne PEUT plus produire un JSON invalide.
+_BLOCK_SCHEMAS = {
+    "resume": {
+        "type": "object",
+        "properties": {"resume": {"type": "string"}},
+        "required": ["resume"],
+    },
+    "quiz": {
+        "type": "object",
+        "properties": {
+            "questions": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "question": {"type": "string"},
+                        "choix": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "minItems": 4,
+                            "maxItems": 4,
+                        },
+                        "reponse": {"type": "integer", "minimum": 0, "maximum": 3},
+                        "explication": {"type": "string"},
+                    },
+                    "required": ["question", "choix", "reponse", "explication"],
+                },
+            }
+        },
+        "required": ["questions"],
+    },
+    "exercices": {
+        "type": "object",
+        "properties": {
+            "exercices": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "enonce": {"type": "string"},
+                        "corrige": {"type": "string"},
+                        "difficulte": {
+                            "type": "string",
+                            "enum": ["facile", "moyen", "difficile"],
+                        },
+                    },
+                    "required": ["enonce", "corrige", "difficulte"],
+                },
+            }
+        },
+        "required": ["exercices"],
+    },
+}
+
+
 @dataclass(frozen=True)
 class BlocksDraft:
     """Un des trois blocs d'un cours, produit depuis son contenu validé."""
@@ -1014,7 +1069,9 @@ class CourseGenerator:
             else None
         )
         for attempt in range(2):
-            raw = await self._chat(messages, num_predict=output_tokens)
+            raw = await self._chat(
+                messages, num_predict=output_tokens, schema=_BLOCK_SCHEMAS.get(kind)
+            )
             parsed = _parse_json_block(raw)
             if parsed:
                 break
@@ -1090,7 +1147,11 @@ class CourseGenerator:
         return BlocksDraft(kind=kind, exercises=exercises[:count], warnings=warnings)
 
     async def _chat(
-        self, messages: List[dict], *, num_predict: Optional[int] = None
+        self,
+        messages: List[dict],
+        *,
+        num_predict: Optional[int] = None,
+        schema: Optional[dict] = None,
     ) -> str:
         # Garde-fou de contexte : Ollama tronque SANS PRÉVENIR au-delà de
         # num_ctx — au pire, le prompt système saute et les règles avec. On
@@ -1106,4 +1167,5 @@ class CourseGenerator:
             timeout=self._settings.generation_timeout_s,
             num_ctx=self._settings.generation_context_tokens,
             num_predict=num_predict or self._settings.generation_output_tokens,
+            schema=schema,
         )

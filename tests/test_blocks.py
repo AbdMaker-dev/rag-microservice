@@ -165,11 +165,49 @@ def test_les_exercices_ont_un_plafond_de_sortie_plus_haut():
     class Recording(ScriptedLlm):
         def __init__(self, replies):
             super().__init__(replies); self.predicts = []
-        async def chat(self, messages, *, timeout, num_ctx, num_predict):
+        async def chat(self, messages, *, timeout, num_ctx, num_predict, schema=None):
             self.predicts.append(num_predict)
-            return await super().chat(messages, timeout=timeout, num_ctx=num_ctx, num_predict=num_predict)
+            return await super().chat(messages, timeout=timeout, num_ctx=num_ctx,
+                                      num_predict=num_predict, schema=schema)
 
     llm = Recording([json.dumps({"exercices": [{"enonce": "e", "corrige": "c"}]})])
     gen = CourseGenerator(llm=llm, retriever=FakeRetriever(), settings=get_settings())
     asyncio.run(gen.generate_blocks(kind="exercices", text=COURS, scope=SCOPE))
     assert llm.predicts[0] >= 3000
+
+
+def test_les_blocs_contraignent_la_sortie_par_un_schema():
+    """Un 7B produit du JSON structurellement invalide sur les longues
+    sorties (constaté : le dernier exercice se ferme trop tôt, la clé
+    suivante flotte dans le tableau). Le schéma le rend impossible."""
+
+    llm = ScriptedLlm([json.dumps({"exercices": [{"enonce": "e", "corrige": "c",
+                                                 "difficulte": "moyen"}]})])
+    gen = CourseGenerator(llm=llm, retriever=FakeRetriever(), settings=get_settings())
+    asyncio.run(gen.generate_blocks(kind="exercices", text=COURS, scope=SCOPE))
+    schema = llm.schemas[0]
+    assert schema["properties"]["exercices"]["items"]["required"] == [
+        "enonce", "corrige", "difficulte"]
+
+
+def test_la_redaction_de_section_reste_en_texte_libre():
+    # Le schéma ne s'applique qu'aux blocs : une section est du texte.
+    plan = json.dumps({"titre": "T", "sections": ["A"]})
+    llm = ScriptedLlm([plan, "Texte [S1]."])
+    asyncio.run(CourseGenerator(llm=llm, retriever=FakeRetriever(),
+                                settings=get_settings()).generate(
+        instruction="cours", scope=SCOPE, course_id="c", strictness="grounded"))
+    assert all(s is None for s in llm.schemas)
+
+
+def test_le_schema_part_dans_la_requete_chat_et_pas_ailleurs():
+    """L'insertion du format a d'abord atterri dans complete(), où schema
+    n'existe pas : le service ne démarrait plus."""
+
+    import inspect
+
+    from app.core import llm as llm_module
+
+    source = inspect.getsource(llm_module.OllamaLlmProvider.chat)
+    assert '"format": schema' in source
+    assert '"format"' not in inspect.getsource(llm_module.OllamaLlmProvider.complete)

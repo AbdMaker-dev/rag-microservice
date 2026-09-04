@@ -27,7 +27,13 @@ class LlmProvider(Protocol):
     async def complete(self, system: str, user: str) -> str: ...
 
     async def chat(
-        self, messages: List[dict], *, timeout: float, num_ctx: int, num_predict: int
+        self,
+        messages: List[dict],
+        *,
+        timeout: float,
+        num_ctx: int,
+        num_predict: int,
+        schema: Optional[dict] = None,
     ) -> str: ...
 
     async def healthy(self) -> bool: ...
@@ -61,12 +67,24 @@ class OllamaLlmProvider:
         return content
 
     async def chat(
-        self, messages: List[dict], *, timeout: float, num_ctx: int, num_predict: int
+        self,
+        messages: List[dict],
+        *,
+        timeout: float,
+        num_ctx: int,
+        num_predict: int,
+        schema: Optional[dict] = None,
     ) -> str:
         """Une conversation complète — c'est elle que la génération utilise.
 
         L'historique porte les extraits déjà fournis et les recherches déjà
         faites : le modèle demande la suite en connaissant ce qu'il a reçu.
+
+        `schema` contraint le décodage à un JSON conforme (sorties
+        structurées d'Ollama). Sans lui, un 7B finit par produire du JSON
+        structurellement invalide sur les longues sorties — constaté en
+        production : un tableau d'exercices dont le dernier objet se ferme
+        trop tôt, la clé suivante flottant dans le tableau.
         """
 
         response = await self._client.post(
@@ -75,6 +93,9 @@ class OllamaLlmProvider:
                 "model": self.model,
                 "stream": False,
                 "messages": messages,
+                # Sorties structurées : le décodage suit le schéma, donc le
+                # JSON est valide par construction.
+                **({"format": schema} if schema else {}),
                 "options": {
                     "num_ctx": num_ctx,
                     "num_predict": num_predict,
