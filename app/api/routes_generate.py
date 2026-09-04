@@ -67,7 +67,8 @@ async def generate(
             scope=body.scope,
             course_id=body.course_id,
             strictness=body.strictness,
-        )
+        ),
+        lane="prof",
     )
     logger.info(
         "génération lancée",
@@ -84,7 +85,16 @@ async def generation_status(job_id: str, request: Request) -> GenerateStatus:
             status_code=status.HTTP_404_NOT_FOUND, detail={"code": "JOB_NOT_FOUND"}
         )
     if job.status != "done":
-        return GenerateStatus(job_id=job.id, status=job.status, error=job.error)
+        # En file d'attente, on dit la place et le temps — jamais un « en
+        # cours » muet pendant que le professeur regarde son écran.
+        store = request.app.state.jobs
+        return GenerateStatus(
+            job_id=job.id,
+            status=job.status,
+            error=job.error,
+            queue_position=store.position(job) or None,
+            wait_seconds=store.wait_seconds(job),
+        )
 
     if isinstance(job.result, PlanDraft):
         plan: PlanDraft = job.result
@@ -183,7 +193,8 @@ async def adjust(
             course_id=body.course_id,
             strictness=body.strictness,
             history=body.history,
-        )
+        ),
+        lane="prof",
     )
     logger.info(
         "révision lancée",
@@ -217,7 +228,8 @@ async def plan(
             current_plan=body.current_plan,
             request=body.request,
             history=body.history,
-        )
+        ),
+        lane="prof",
     )
     logger.info("plan lancé", extra={"requestId": body.request_id, "job": job.id})
     return GenerateAccepted(request_id=body.request_id, job_id=job.id)
@@ -258,7 +270,8 @@ async def section(
             current_text=body.current_text,
             request=body.request,
             history=body.history,
-        )
+        ),
+        lane="prof",
     )
     logger.info(
         "section lancée",
@@ -293,7 +306,8 @@ async def blocks(
             scope=body.scope,
             count=body.count,
             instruction=body.instruction,
-        )
+        ),
+        lane="prof",
     )
     logger.info(
         "bloc lancé",
@@ -333,7 +347,8 @@ async def assessment(
             total_points=body.total_points,
             exercise_count=body.exercise_count,
             instruction=body.instruction,
-        )
+        ),
+        lane="prof",
     )
     logger.info(
         "épreuve lancée",

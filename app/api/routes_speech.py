@@ -57,7 +57,7 @@ async def speak(body: SpeechRequest, request: Request) -> SpeechAccepted:
         )
         return result
 
-    job = request.app.state.jobs.submit(work)
+    job = request.app.state.jobs.submit(work, lane="prof")
     return SpeechAccepted(request_id=body.request_id, job_id=job.id)
 
 
@@ -72,7 +72,13 @@ async def speech_status(job_id: str, request: Request) -> SpeechStatus:
     if job.status == "failed":
         return SpeechStatus(job_id=job.id, status="failed", error=job.error)
     if job.status != "done":
-        return SpeechStatus(job_id=job.id, status="running")
+        store = request.app.state.jobs
+        return SpeechStatus(
+            job_id=job.id,
+            status=job.status,
+            queue_position=store.position(job) or None,
+            wait_seconds=store.wait_seconds(job),
+        )
     result = job.result
     return SpeechStatus(
         job_id=job.id,

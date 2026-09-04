@@ -48,7 +48,7 @@ async def answer(body: AnswerRequest, request: Request) -> AnswerAccepted:
         )
         return result
 
-    job = request.app.state.jobs.submit(work)
+    job = request.app.state.jobs.submit(work, lane="eleve")
     return AnswerAccepted(request_id=body.request_id, job_id=job.id)
 
 
@@ -63,7 +63,13 @@ async def answer_status(job_id: str, request: Request) -> AnswerStatus:
     if job.status == "failed":
         return AnswerStatus(job_id=job.id, status="failed", error=job.error)
     if job.status != "done":
-        return AnswerStatus(job_id=job.id, status="running")
+        store = request.app.state.jobs
+        return AnswerStatus(
+            job_id=job.id,
+            status=job.status,
+            queue_position=store.position(job) or None,
+            wait_seconds=store.wait_seconds(job),
+        )
     result = job.result
     return AnswerStatus(
         job_id=job.id,

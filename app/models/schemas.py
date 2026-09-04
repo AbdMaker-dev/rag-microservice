@@ -473,7 +473,12 @@ class GeneratedSection(Wire):
 class GenerateStatus(Wire):
     contract_version: Literal["1.0"] = CONTRACT_VERSION
     job_id: str
-    status: Literal["running", "done", "failed"]
+    status: Literal["queued", "running", "done", "failed"]
+    # Quand la tâche attend son tour : sa place (1 = le prochain)
+    # et l'attente annoncée. L'écran dit « 2e — environ 1 min 20 »
+    # au lieu d'un « en cours » muet.
+    queue_position: Optional[int] = None
+    wait_seconds: Optional[int] = None
     title: Optional[str] = None
     sections: List[GeneratedSection] = []
     # Rendu par /generate/plan : le plan proposé — sa description (le bref
@@ -538,7 +543,12 @@ class TutorCitation(Wire):
 class AnswerStatus(Wire):
     contract_version: Literal["1.0"] = CONTRACT_VERSION
     job_id: str
-    status: Literal["running", "done", "failed"]
+    status: Literal["queued", "running", "done", "failed"]
+    # Quand la tâche attend son tour : sa place (1 = le prochain)
+    # et l'attente annoncée. L'écran dit « 2e — environ 1 min 20 »
+    # au lieu d'un « en cours » muet.
+    queue_position: Optional[int] = None
+    wait_seconds: Optional[int] = None
     answer: str = ""
     # La petite question finale : vérifier que le concept est compris.
     check: str = ""
@@ -574,7 +584,12 @@ class SpeechAccepted(Wire):
 class SpeechStatus(Wire):
     contract_version: Literal["1.0"] = CONTRACT_VERSION
     job_id: str
-    status: Literal["running", "done", "failed"]
+    status: Literal["queued", "running", "done", "failed"]
+    # Quand la tâche attend son tour : sa place (1 = le prochain)
+    # et l'attente annoncée. L'écran dit « 2e — environ 1 min 20 »
+    # au lieu d'un « en cours » muet.
+    queue_position: Optional[int] = None
+    wait_seconds: Optional[int] = None
     # mp3 (mono 64 kbit/s) en temps normal ; wav si ffmpeg manque — le champ
     # format fait foi, l'appelant stocke tel quel.
     format: Optional[str] = None
