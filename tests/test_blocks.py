@@ -121,3 +121,23 @@ def test_la_route_blocks_rend_un_ticket_puis_le_quiz():
     assert body["status"] == "done"
     assert body["kind"] == "quiz"
     assert body["quiz"][0]["answer"] == 1
+
+
+def test_les_formules_a_backslash_ne_cassent_plus_le_json():
+    """Constaté en production : « \\( z' \\) » dans une question rendait le
+    quiz entier illisible — échappement JSON invalide."""
+
+    from app.core.generation import _parse_json_block
+
+    raw = 'Voici : {"questions": [{"question": "Que vaut \\( z\' \\) si \\frac{1}{2} ?", ' \
+          '"choix": ["a", "b", "c", "d"], "reponse": 0, "explication": "voir \\(\\omega\\)"}]} merci'
+    parsed = _parse_json_block(raw)
+    assert parsed is not None
+    assert parsed["questions"][0]["question"].startswith("Que vaut")
+
+
+def test_deux_objets_cote_a_cote_fusionnent():
+    from app.core.generation import _parse_json_block
+
+    parsed = _parse_json_block('{"reponse": "A"}\n{"verification": "B"}')
+    assert parsed == {"reponse": "A", "verification": "B"}

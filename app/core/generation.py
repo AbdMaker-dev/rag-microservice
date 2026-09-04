@@ -132,17 +132,66 @@ def _context_line(scope: Scope) -> str:
     )
 
 
-def _parse_json_block(raw: str) -> Optional[dict]:
-    """Le modèle répond parfois avec du texte autour du JSON : on l'isole."""
+_BAD_ESCAPE = re.compile(r'\\(?!["\\/bfnrtu])')
 
-    start, end = raw.find("{"), raw.rfind("}")
-    if start < 0 or end <= start:
-        return None
-    try:
-        parsed = json.loads(raw[start : end + 1])
-    except json.JSONDecodeError:
-        return None
-    return parsed if isinstance(parsed, dict) else None
+
+def _balanced_blocks(raw: str) -> List[str]:
+    """Les objets JSON de premier niveau, par comptage d'accolades.
+
+    Le modèle émet parfois deux objets côte à côte, ou du texte autour ;
+    le découpage premier-{ / dernier-} produisait alors un JSON invalide.
+    """
+
+    blocks, depth, start, in_string, escaped = [], 0, -1, False, False
+    for index, char in enumerate(raw):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            if depth == 0:
+                start = index
+            depth += 1
+        elif char == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and start >= 0:
+                blocks.append(raw[start : index + 1])
+                start = -1
+    return blocks
+
+
+def _parse_json_block(raw: str) -> Optional[dict]:
+    """Le modèle répond parfois avec du texte autour du JSON : on l'isole.
+
+    Constaté en production sur les quiz de maths : les formules portent des
+    backslashes (« \\( z' \\) », « \\frac ») qui sont des échappements
+    invalides en JSON — le bloc entier devenait illisible. On répare ces
+    échappements avant de renoncer, et on lit les objets un par un (le
+    modèle en émet parfois deux côte à côte) en fusionnant leurs champs.
+    """
+
+    merged: dict = {}
+    for block in _balanced_blocks(raw):
+        for candidate in (block, _BAD_ESCAPE.sub(r"\\\\", block)):
+            try:
+                parsed = json.loads(candidate, strict=False)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                merged.update(parsed)
+            break
+    if merged:
+        return merged
+    logger.warning(
+        "réponse du modèle illisible en JSON", extra={"apercu": raw[:200]}
+    )
+    return None
 
 
 def _wants_search(raw: str) -> Optional[Tuple[str, str]]:
