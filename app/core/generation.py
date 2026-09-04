@@ -326,6 +326,26 @@ def _wants_search(raw: str) -> Optional[Tuple[str, str]]:
     return question, nature if nature in _ROLES else "support-cours"
 
 
+def _strip_control_blocks(text: str) -> str:
+    """Retirer d'un texte les objets de contrôle que le modèle y a laissés.
+
+    Vécu en production (01/09/2026) : le modèle a émis deux
+    {"chercher": …} PUIS la section, dans la même réponse ; le parseur de
+    l'époque butait sur les accolades des formules LaTeX, ne voyait pas les
+    demandes, et le cours du professeur s'est retrouvé avec du JSON en tête.
+    Le parseur a été refait depuis, mais un cours ne doit JAMAIS pouvoir
+    porter ces blocs : on les retire de la sortie, quoi qu'il arrive.
+    """
+
+    if "chercher" not in text:
+        return text
+    cleaned = text
+    for block in _balanced_blocks(text):
+        if '"chercher"' in block or "'chercher'" in block:
+            cleaned = cleaned.replace(block, "")
+    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+
 def _render_passages(passages: List[Passage], prefix: str, start: int) -> str:
     lines = []
     for offset, passage in enumerate(passages):
@@ -1018,6 +1038,8 @@ class CourseGenerator:
             raise GenerationFailed(
                 f"la section « {heading} » n'a pas été rédigée après 4 tours"
             )
+
+        text = _strip_control_blocks(text)
 
         if strictness == "grounded" and not _LABEL.search(text):
             # Constaté en production (7 sections sur 8) : le modèle rédige

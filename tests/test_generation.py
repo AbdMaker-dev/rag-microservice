@@ -458,3 +458,48 @@ def test_la_relance_qui_echoue_garde_le_texte_et_le_warning():
 
     assert course.sections[0].text == "Sans étiquette."
     assert "GROUNDED_TEXT_WITHOUT_CITATIONS" in course.warnings
+
+
+def test_une_demande_de_recherche_melee_au_texte_est_bien_vue():
+    """Vécu le 01/09 : le modèle a émis deux {"chercher"} PUIS la section.
+    Le parseur d'alors butait sur les accolades LaTeX et le cours du prof
+    s'est retrouvé avec du JSON en tête."""
+
+    from app.core.generation import _wants_search
+
+    raw = (
+        '{"chercher": {"question": "relation module argument ?", "nature": "support-cours"}}\n\n'
+        '{"chercher": {"question": "interprétation géométrique ?", "nature": "support-cours"}}\n\n'
+        "Sur la base des informations fournies, voici la section :\n\n"
+        "Le centre est \\(z' - \\omega = ke^{i\\theta}(z - \\omega)\\) — noter les accolades."
+    )
+    wanted = _wants_search(raw)
+    assert wanted is not None, "la demande de recherche doit être vue"
+    assert "interprétation" in wanted[0] or "relation" in wanted[0]
+
+
+def test_un_bloc_de_controle_ne_finit_jamais_dans_le_cours():
+    """Le filet : quoi qu'il arrive en amont, la section rendue au
+    professeur ne porte pas de JSON de contrôle. Le cours du 01/09 en
+    portait deux en tête."""
+
+    from app.core.generation import _strip_control_blocks
+
+    pollue = (
+        '{"chercher": {"question": "relation module argument ?", "nature": "support-cours"}}\n\n'
+        '{"chercher": {"question": "interprétation géométrique ?", "nature": "support-cours"}}\n\n'
+        "### Relation entre les éléments\n\n"
+        "Le centre vérifie \\(z' - \\omega = ke^{i\\theta}(z - \\omega)\\)."
+    )
+    propre = _strip_control_blocks(pollue)
+    assert "chercher" not in propre
+    assert propre.startswith("### Relation")
+    # Les formules, elles, ne sont pas touchées.
+    assert "ke^{i\\theta}" in propre
+
+
+def test_un_texte_sans_bloc_de_controle_reste_intact():
+    from app.core.generation import _strip_control_blocks
+
+    texte = "Une section avec des accolades \\(\\frac{a}{b}\\) et rien d'autre."
+    assert _strip_control_blocks(texte) == texte
