@@ -199,7 +199,9 @@ _LATEX_COMMANDS = (
     "binom", "boldsymbol", "nu", "ne", "neq", "nabla", "not", "rho", "right",
     "Rightarrow", "rightarrow", "ln", "lim", "left", "leq", "le", "lambda",
     "Leftrightarrow", "leftrightarrow", "langle", "ldots", "log",
-    "underline", "underbrace", "u", "b", "f",
+    "underline", "underbrace",
+    # JAMAIS « u », « b » ni « f » seuls : « \uXXXX » est un échappement
+    # unicode JSON (les accents !), le doubler rendait « \u00e9 » littéral.
 )
 _LATEX_ESCAPE = re.compile(
     r"(?<!\\)\\(" + "|".join(sorted(_LATEX_COMMANDS, key=len, reverse=True))

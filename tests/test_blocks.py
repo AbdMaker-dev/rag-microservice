@@ -230,3 +230,13 @@ def test_un_frac_deja_echappe_reste_intact():
     # « \\\\frac » dans le JSON = « \\frac » dans la chaîne : déjà correct.
     parsed = _parse_json_block('{"q": "\\\\frac{a}{b}"}')
     assert parsed["q"] == "\\frac{a}{b}"
+
+
+def test_les_accents_unicode_ne_sont_jamais_casses():
+    """« u » dans la liste des commandes LaTeX rendait « \\u00e9 » littéral :
+    tous les accents des JSON du modèle étaient détruits."""
+
+    from app.core.generation import _parse_json_block
+
+    parsed = _parse_json_block('{"t": "Les id\\u00e9es cl\\u00e9s\\u2026"}')
+    assert parsed["t"] == "Les idées clés…"
