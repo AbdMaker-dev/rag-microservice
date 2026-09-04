@@ -432,3 +432,47 @@ def test_une_annale_est_commune_au_perimetre_comme_un_programme():
     })
     assert response.status_code == 422
     assert response.json()["detail"]["code"] == "OFFICIAL_CURRICULUM_HAS_NO_COURSE"
+
+
+def test_un_pdf_annonce_octet_stream_est_lu_quand_meme():
+    """Management relaie un dépôt multipart : le type arrive générique.
+    La route promet que la signature décide — elle refusait pourtant la
+    requête d'entrée, et le premier appel réel a cassé (04/09/2026)."""
+
+    import base64
+
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+
+    client = TestClient(create_app())
+    token = {"X-Service-Token": "test-secret-value-of-at-least-32-chars"}
+    pdf = open("../docs/similitudes directes.pdf", "rb").read()
+    response = client.post("/extract", headers=token, json={
+        "requestId": "octet-1", "filename": "cours.pdf",
+        "mediaType": "application/octet-stream",
+        "contentBase64": base64.b64encode(pdf).decode(),
+    })
+    assert response.status_code == 200
+    body = response.json()
+    assert body["mediaType"] == "application/pdf"
+    assert "MEDIA_TYPE_MISMATCH" in body["warnings"]
+    assert body["characters"] > 500
+
+
+def test_un_octet_stream_de_type_inconnu_est_refuse_clairement():
+    import base64
+
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+
+    client = TestClient(create_app())
+    token = {"X-Service-Token": "test-secret-value-of-at-least-32-chars"}
+    response = client.post("/extract", headers=token, json={
+        "requestId": "octet-2", "filename": "mystere.bin",
+        "mediaType": "application/octet-stream",
+        "contentBase64": base64.b64encode(b"\x00\x01\x02 pas un document").decode(),
+    })
+    assert response.status_code == 415
+    assert response.json()["detail"]["code"] == "UNSUPPORTED_MEDIA_TYPE"

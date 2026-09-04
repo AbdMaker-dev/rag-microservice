@@ -52,6 +52,12 @@ MediaType = Literal[
     "text/markdown",
     "application/pdf",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    # Le type générique de qui ne sait pas nommer son fichier : un dépôt
+    # multipart relayé par la plateforme arrive ainsi. On ne le croit pas
+    # davantage que les autres — la SIGNATURE du fichier décide, comme le
+    # promet cette route. Le refuser d'entrée contredisait cette promesse et
+    # a cassé le premier appel réel de management (04/09/2026).
+    "application/octet-stream",
 ]
 
 

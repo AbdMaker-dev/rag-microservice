@@ -218,6 +218,16 @@ async def extract(
 
     media_type = body.media_type
     actual = sniff(payload)
+    if media_type == "application/octet-stream" and actual is None:
+        # Type générique ET signature inconnue : on ne devine pas.
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail={
+                "code": "UNSUPPORTED_MEDIA_TYPE",
+                "mediaType": media_type,
+                "hint": "Type de fichier non reconnu : déposez un PDF ou un .docx.",
+            },
+        )
     if actual is not None and actual != media_type:
         logger.info(
             "type déclaré démenti par le fichier",
