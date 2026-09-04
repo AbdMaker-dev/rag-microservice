@@ -133,6 +133,22 @@ def _context_line(scope: Scope) -> str:
 
 
 _BAD_ESCAPE = re.compile(r'\\(?!["\\/bfnrtu])')
+# Les commandes LaTeX qui commencent par une lettre d'échappement JSON valide
+# (\frac → \f, \theta → \t, \beta → \b, \nu → \n, \rho → \r) : json.loads
+# les lit comme des caractères de contrôle et « \frac » devient « rac ».
+# On double leur backslash AVANT de lire. Liste volontairement explicite :
+# doubler tout « \n » suivi de lettres casserait les vrais retours à la ligne.
+_LATEX_COMMANDS = (
+    "frac", "dfrac", "tfrac", "forall", "theta", "Theta", "tan", "text",
+    "textbf", "times", "to", "tau", "beta", "bar", "begin", "bigl", "bigr",
+    "binom", "boldsymbol", "nu", "ne", "neq", "nabla", "not", "rho", "right",
+    "Rightarrow", "rightarrow", "ln", "lim", "left", "leq", "le", "lambda",
+    "Leftrightarrow", "leftrightarrow", "langle", "ldots", "log",
+    "underline", "underbrace", "u", "b", "f",
+)
+_LATEX_ESCAPE = re.compile(
+    r"\\(" + "|".join(sorted(_LATEX_COMMANDS, key=len, reverse=True)) + r")(?![a-zA-Z])"
+)
 
 
 def _balanced_blocks(raw: str) -> List[str]:
@@ -178,7 +194,8 @@ def _parse_json_block(raw: str) -> Optional[dict]:
 
     merged: dict = {}
     for block in _balanced_blocks(raw):
-        for candidate in (block, _BAD_ESCAPE.sub(r"\\\\", block)):
+        repaired = _BAD_ESCAPE.sub(r"\\\\", _LATEX_ESCAPE.sub(r"\\\\\1", block))
+        for candidate in (block, repaired):
             try:
                 parsed = json.loads(candidate, strict=False)
             except json.JSONDecodeError:

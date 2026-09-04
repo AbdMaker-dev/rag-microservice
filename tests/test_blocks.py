@@ -141,3 +141,19 @@ def test_deux_objets_cote_a_cote_fusionnent():
 
     parsed = _parse_json_block('{"reponse": "A"}\n{"verification": "B"}')
     assert parsed == {"reponse": "A", "verification": "B"}
+
+
+def test_frac_et_theta_survivent_a_la_lecture_json():
+    """« \\frac » devenait « rac » et « \\theta » une tabulation : \\f et \\t
+    sont des échappements JSON valides. Les commandes LaTeX se protègent
+    avant lecture ; un vrai « \\n » de retour à la ligne, lui, reste un
+    retour à la ligne."""
+
+    from app.core.generation import _parse_json_block
+
+    raw = '{"q": "\\( \\Omega = \\frac{b}{1-a} \\), \\( \\theta = \\arg(a) \\), ligne1\\nligne2"}'
+    parsed = _parse_json_block(raw)
+    assert parsed is not None
+    assert "\\frac{b}{1-a}" in parsed["q"]
+    assert "\\theta" in parsed["q"]
+    assert "ligne1\nligne2" in parsed["q"]
