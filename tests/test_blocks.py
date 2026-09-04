@@ -211,3 +211,22 @@ def test_le_schema_part_dans_la_requete_chat_et_pas_ailleurs():
     source = inspect.getsource(llm_module.OllamaLlmProvider.chat)
     assert '"format": schema' in source
     assert '"format"' not in inspect.getsource(llm_module.OllamaLlmProvider.complete)
+
+
+def test_frac_survit_meme_quand_le_json_est_deja_valide():
+    """Avec les sorties structurées le JSON est valide, mais « \\frac » y
+    reste un saut de page : la lecture réussissait et rendait « rac{b} ».
+    La réparation passe donc AVANT la lecture."""
+
+    from app.core.generation import _parse_json_block
+
+    parsed = _parse_json_block('{"q": "centre \\( \\frac{b}{1-a} \\)"}')
+    assert parsed["q"] == "centre \\( \\frac{b}{1-a} \\)"
+
+
+def test_un_frac_deja_echappe_reste_intact():
+    from app.core.generation import _parse_json_block
+
+    # « \\\\frac » dans le JSON = « \\frac » dans la chaîne : déjà correct.
+    parsed = _parse_json_block('{"q": "\\\\frac{a}{b}"}')
+    assert parsed["q"] == "\\frac{a}{b}"

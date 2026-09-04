@@ -202,7 +202,8 @@ _LATEX_COMMANDS = (
     "underline", "underbrace", "u", "b", "f",
 )
 _LATEX_ESCAPE = re.compile(
-    r"\\(" + "|".join(sorted(_LATEX_COMMANDS, key=len, reverse=True)) + r")(?![a-zA-Z])"
+    r"(?<!\\)\\(" + "|".join(sorted(_LATEX_COMMANDS, key=len, reverse=True))
+    + r")(?![a-zA-Z])"
 )
 
 
@@ -249,8 +250,12 @@ def _parse_json_block(raw: str) -> Optional[dict]:
 
     merged: dict = {}
     for block in _balanced_blocks(raw):
+        # La réparation d'abord : depuis les sorties structurées, le JSON
+        # est valide même quand « \frac » y est un saut de page — la lecture
+        # réussissait et rendait « rac{b}{1-a} ». On répare, puis on retombe
+        # sur le brut si la réparation elle-même ne se lit pas.
         repaired = _BAD_ESCAPE.sub(r"\\\\", _LATEX_ESCAPE.sub(r"\\\\\1", block))
-        for candidate in (block, repaired):
+        for candidate in (repaired, block):
             try:
                 parsed = json.loads(candidate, strict=False)
             except json.JSONDecodeError:
