@@ -70,6 +70,43 @@ class ExtractRequest(Wire):
     content_base64: str = Field(min_length=1)
 
 
+class PlanningPeriod(Wire):
+    """Quand un chapitre se traite. Un chapitre peut déborder sur le mois
+    suivant : il a alors deux périodes, pas deux entrées."""
+
+    month: Optional[str] = None
+    weeks: List[int] = []
+
+
+class PlanningEntryOut(Wire):
+    position: int
+    chapter: str
+    details: str = ""
+    part: str = ""
+    objectives: List[str] = []
+    assessments: List[str] = []
+    periods: List[PlanningPeriod] = []
+
+
+class PlanningResponse(Wire):
+    """Le planning officiel, lu sans qu'aucun modèle n'intervienne.
+
+    L'en-tête (année, matière, niveau) peut manquer : il part alors en
+    `warnings` et c'est l'admin qui complète. On ne devine pas l'année
+    scolaire d'un document officiel.
+    """
+
+    contract_version: Literal["1.0"] = CONTRACT_VERSION
+    request_id: str
+    filename: str
+    school_year: Optional[str] = None
+    subject: Optional[str] = None
+    grade_label: Optional[str] = None
+    weekly_hours: Optional[int] = None
+    entries: List[PlanningEntryOut] = []
+    warnings: List[str] = []
+
+
 class SectionIssue(Wire):
     """Un passage à vérifier, situé par ses positions dans le texte.
 

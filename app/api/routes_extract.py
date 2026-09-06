@@ -36,6 +36,7 @@ from app.core.extraction import (
     sniff,
     to_sections,
 )
+from app.core.planning import parse_planning
 from app.core.routing import Route, classify
 from app.core.confidence import inspect_section
 from app.core.quality import assess
@@ -48,6 +49,9 @@ from app.models.schemas import (
     ExtractRequest,
     ExtractResponse,
     FontDiagnosis,
+    PlanningEntryOut,
+    PlanningPeriod,
+    PlanningResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -343,4 +347,74 @@ async def extract(
         analysis=analysis,
         figures=figures,
         warnings=warnings,
+    )
+
+
+@router.post("/extract/planning", response_model=PlanningResponse)
+async def extract_planning(
+    body: ExtractRequest,
+    settings: Settings = Depends(get_settings),
+) -> PlanningResponse:
+    """Le planning du ministère devient des chapitres ordonnés.
+
+    Le Sénégal publie deux documents distincts : le *programme* dit QUOI
+    enseigner, le *planning* — « outil d'harmonisation des progressions »
+    des Inspections d'Académie — dit QUAND. Cette route lit le second.
+
+    Comme `/extract`, aucun modèle n'intervient : un planning officiel se
+    recopie. Ce que l'en-tête ne dit pas part en `warnings` et c'est
+    l'admin qui complète — on n'invente pas une année scolaire.
+    """
+
+    payload = _decode(body, settings)
+    media_type = sniff(payload) or body.media_type
+    try:
+        if media_type == "application/pdf":
+            text, _, _, _, _ = _extract_pdf(payload, settings)
+        else:
+            text = load(payload, media_type)
+    except UnsupportedMediaType as error:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail={"code": "UNSUPPORTED_MEDIA_TYPE", "mediaType": media_type},
+        ) from error
+    except Exception as error:  # noqa: BLE001
+        logger.exception("planning illisible")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "DOCUMENT_UNREADABLE"},
+        ) from error
+
+    planning = parse_planning(text)
+    logger.info(
+        "planning extrait",
+        extra={
+            "requestId": body.request_id,
+            "entries": len(planning.entries),
+            "warnings": planning.warnings,
+        },
+    )
+    return PlanningResponse(
+        request_id=body.request_id,
+        filename=body.filename,
+        school_year=planning.school_year,
+        subject=planning.subject,
+        grade_label=planning.grade_label,
+        weekly_hours=planning.weekly_hours,
+        entries=[
+            PlanningEntryOut(
+                position=entry.position,
+                chapter=entry.chapter,
+                details=entry.details,
+                part=entry.part,
+                objectives=entry.objectives,
+                assessments=entry.assessments,
+                periods=[
+                    PlanningPeriod(month=period.month, weeks=period.weeks)
+                    for period in entry.periods
+                ],
+            )
+            for entry in planning.entries
+        ],
+        warnings=planning.warnings,
     )
