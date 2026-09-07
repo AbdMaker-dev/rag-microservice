@@ -27,6 +27,20 @@ router = APIRouter(tags=["answer"], dependencies=[Depends(require_service_token)
 
 @router.post("/answer", response_model=AnswerAccepted, status_code=status.HTTP_202_ACCEPTED)
 async def answer(body: AnswerRequest, request: Request) -> AnswerAccepted:
+    # Une question part TOUJOURS de quelque part : un cours publié, ou un
+    # cours du cahier. Sans l'un ni l'autre, on ne saurait pas où chercher —
+    # et chercher « partout » rendrait des extraits sans rapport.
+    if not body.course_id and not body.notebook_document_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "COURSE_OR_NOTEBOOK_REQUIRED"},
+        )
+    if body.notebook_document_id and not body.student_account_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "NOTEBOOK_REQUIRES_STUDENT"},
+        )
+
     tutor = request.app.state.tutor
 
     async def work():

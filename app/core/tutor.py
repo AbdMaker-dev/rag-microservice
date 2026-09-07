@@ -143,7 +143,7 @@ class Tutor:
         *,
         question: str,
         scope: Scope,
-        course_id: str,
+        course_id: str = "",
         section_heading: str = "",
         history: Optional[List[dict]] = None,
         student_account_id: str = "",
@@ -171,7 +171,14 @@ class Tutor:
                 scope=scope,
                 limit=4,
                 max_excerpt_characters=700,
-                course_id=course_id if role != "programme-officiel" else None,
+                # Chaîne vide = pas de cours (question sur le cahier) :
+                # il faut None, sinon le filtre SQL cherche un cours dont
+                # l'identifiant est vide et ne rend jamais rien.
+                course_id=(
+                    course_id
+                    if course_id and role != "programme-officiel"
+                    else None
+                ),
                 role=role,
             )
             fresh = [p for p in found if p.chunk_id not in seen]
@@ -226,8 +233,13 @@ class Tutor:
             # modèle — un modèle sans extraits inventerait.
             return TutorAnswer(
                 text=(
-                    "Je n'ai pas trouvé de quoi répondre dans ton cours ni "
-                    "dans les documents de ton professeur. Pose-lui la "
+                    "Je n'ai pas trouvé de quoi répondre dans les notes que "
+                    "tu as ajoutées. Vérifie que la page que tu cherches est "
+                    "bien dans ce cours — et si c'est un mot précis, essaie "
+                    "de me le demander autrement."
+                    if notebook_document_id
+                    else "Je n'ai pas trouvé de quoi répondre dans ton cours "
+                    "ni dans les documents de ton professeur. Pose-lui la "
                     "question en classe — et si c'est un mot précis, essaie "
                     "de me le demander autrement."
                 ),

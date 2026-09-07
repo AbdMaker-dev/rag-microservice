@@ -115,3 +115,36 @@ def test_sans_cahier_toutes_les_citations_restent_validees():
 
     passage = Passage("c-1", "doc-1", "Cours du prof", "§1", "…", "fr", 0.9)
     assert _citations([passage])[0]["source"] == "valide"
+
+
+def test_une_question_sur_le_cahier_n_exige_aucun_cours_publie():
+    """C'est le cas NOMINAL du flux 2 : le prof a fait cours en classe, rien
+    n'est publié, et c'est précisément pour ça qu'Awa a scanné. Exiger un
+    cours publié l'empêcherait de parler de ses propres notes."""
+
+    from app.models.schemas import AnswerRequest
+
+    body = AnswerRequest(
+        requestId="r-1",
+        scope=Scope(
+            country="SN", subject="maths", grade="terminale", level="lycee",
+            track="S2", curriculumVersion="2006", language="fr",
+        ),
+        question="explique-moi les similitudes",
+        studentAccountId="awa",
+        notebookDocumentId="doc-1",
+    )
+    assert body.course_id == ""
+    assert body.notebook_document_id == "doc-1"
+
+
+def test_un_course_id_vide_ne_devient_jamais_un_filtre():
+    """Une chaîne vide passée au SQL chercherait un cours dont l'identifiant
+    est vide — et ne rendrait jamais rien, en silence."""
+
+    import inspect
+
+    from app.core.tutor import Tutor
+
+    source = inspect.getsource(Tutor.answer)
+    assert "if course_id and role" in source

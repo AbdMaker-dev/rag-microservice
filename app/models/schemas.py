@@ -648,7 +648,14 @@ class AnswerRequest(Wire):
     request_id: str
     # Le cours depuis lequel l'élève pose sa question — jamais choisi par le
     # client final : la plateforme le déduit de la page où il se trouve.
-    course_id: str = Field(min_length=1)
+    #
+    # VIDE quand la question porte sur un cours du CAHIER : c'est le cas
+    # nominal du flux 2 — le professeur a fait cours en classe et rien n'est
+    # publié sur la plateforme, c'est précisément pour ça que l'élève a
+    # scanné. Exiger un courseId l'empêcherait de parler de ses propres
+    # notes tant que son prof n'a pas publié : ce serait une limite produit
+    # inventée par le contrat, pas par le besoin.
+    course_id: str = ""
     # Le périmètre vient du COMPTE de l'élève et de son inscription : c'est
     # lui qui adapte le niveau de langue (classe) et verrouille le pays.
     scope: Scope
