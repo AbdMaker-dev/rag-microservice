@@ -20,6 +20,7 @@ from fastapi.responses import JSONResponse
 
 from app.api import (
     routes_answer,
+    routes_notebook,
     routes_generate,
     routes_documents,
     routes_extract,
@@ -37,6 +38,8 @@ from app.core.llm import build_llm_provider
 from app.core.retrieval import Retriever
 from app.core.speech import SpeechEngine
 from app.core.tutor import Tutor
+from app.core.notebook import NotebookService
+from app.db.notebook_repository import NotebookRepository
 from app.db.repository import IndexRepository
 
 logger = logging.getLogger(__name__)
@@ -57,6 +60,9 @@ async def lifespan(app: FastAPI):
     app.state.http = client
     app.state.database = database
     app.state.repository = IndexRepository(database.pool)
+    # La base CAHIERS, séparée de celle des professeurs jusque dans le
+    # dépôt : deux objets distincts, aucun chemin de l'un vers l'autre.
+    app.state.notebooks = NotebookRepository(database.pool)
     embeddings = build_embedding_provider(settings, client)
     app.state.embeddings = embeddings
     app.state.jobs = JobStore()
@@ -75,6 +81,12 @@ async def lifespan(app: FastAPI):
     # et APRÈS le retriever qu'il consomme. L'ordre a déjà empêché le
     # service de démarrer en production (AttributeError: retriever) : le
     # test de démarrage joue désormais ce lifespan, il ne se relit pas.
+    app.state.notebook = NotebookService(
+        embeddings=embeddings,
+        documents=app.state.repository,
+        notebooks=app.state.notebooks,
+        settings=settings,
+    )
     app.state.tutor = Tutor(
         llm=app.state.llm, retriever=app.state.retriever, settings=settings
     )
@@ -111,6 +123,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_generate.router)
     app.include_router(routes_speech.router)
     app.include_router(routes_answer.router)
+    app.include_router(routes_notebook.router)
 
     @app.exception_handler(Exception)
     async def unhandled(request, exc):  # noqa: ANN001, ARG001

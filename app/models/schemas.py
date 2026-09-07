@@ -70,6 +70,78 @@ class ExtractRequest(Wire):
     content_base64: str = Field(min_length=1)
 
 
+# ─────────────────────────── LE CAHIER DE L'ÉLÈVE ───────────────────────────
+
+
+class NotebookRepairRequest(Wire):
+    """Le texte lu dans le cahier, à confronter au contenu validé.
+
+    Le rag ne reçoit JAMAIS de photo : management lit les pages, le rag
+    travaille sur du texte. Le périmètre vient du compte de l'élève.
+    """
+
+    request_id: str
+    student_account_id: str = Field(min_length=1)
+    text: str = Field(min_length=1)
+    scope: Scope
+    chapter: str = ""
+
+
+class NotebookProof(Wire):
+    """D'où vient une correction — Awa doit pouvoir le lire."""
+
+    text: str
+    title: str
+    locator: str
+
+
+class NotebookSegment(Wire):
+    ordinal: int
+    original: str
+    text: str
+    # inchange | corrige | a-verifier
+    status: str
+    reason: str = ""
+    proof: Optional[NotebookProof] = None
+
+
+class NotebookRepairResponse(Wire):
+    contract_version: Literal["1.0"] = CONTRACT_VERSION
+    request_id: str
+    text: str
+    segments: List[NotebookSegment] = []
+    corrected: int = 0
+    to_check: int = 0
+    proven_from: List[str] = []
+    warnings: List[str] = []
+
+
+class NotebookIndexRequest(Wire):
+    """Ranger le cours d'un élève dans SA base, après qu'il a validé."""
+
+    request_id: str
+    document_id: str = Field(min_length=1)
+    student_account_id: str = Field(min_length=1)
+    title: str = Field(min_length=1, max_length=300)
+    chapter: str = ""
+    scope: Scope
+    text: str = Field(min_length=1)
+
+
+class NotebookIndexResponse(Wire):
+    contract_version: Literal["1.0"] = CONTRACT_VERSION
+    request_id: str
+    document_id: Optional[str] = None
+    chunks: int = 0
+    warnings: List[str] = []
+
+
+class NotebookDeleteResponse(Wire):
+    contract_version: Literal["1.0"] = CONTRACT_VERSION
+    document_id: str
+    deleted: bool
+
+
 class PlanningPeriod(Wire):
     """Quand un chapitre se traite. Un chapitre peut déborder sur le mois
     suivant : il a alors deux périodes, pas deux entrées."""
