@@ -36,6 +36,8 @@ async def answer(body: AnswerRequest, request: Request) -> AnswerAccepted:
             course_id=body.course_id,
             section_heading=body.section_heading,
             history=[turn.model_dump() for turn in body.history],
+            student_account_id=body.student_account_id,
+            notebook_document_id=body.notebook_document_id,
         )
         logger.info(
             "réponse du tuteur",

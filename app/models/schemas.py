@@ -106,6 +106,15 @@ class NotebookSegment(Wire):
 
 
 class NotebookRepairResponse(Wire):
+    """Le résultat de la confrontation au contenu validé.
+
+    `segments` fait foi. `text` n'est qu'un APERÇU — la transcription si
+    TOUTES les corrections étaient acceptées. L'indexer reviendrait à
+    accepter à la place de l'élève, ce que ce contrat interdit : c'est à
+    l'appelant de reconstruire le texte depuis les décisions de l'élève,
+    passage par passage.
+    """
+
     contract_version: Literal["1.0"] = CONTRACT_VERSION
     request_id: str
     text: str
@@ -114,6 +123,22 @@ class NotebookRepairResponse(Wire):
     to_check: int = 0
     proven_from: List[str] = []
     warnings: List[str] = []
+
+
+class NotebookGenerateRequest(Wire):
+    """Produire de quoi réviser SUR le cours que l'élève a validé.
+
+    Le texte envoyé est celui qu'il a approuvé passage par passage — pas la
+    transcription brute, pas l'aperçu tout corrigé.
+    """
+
+    request_id: str
+    student_account_id: str = Field(min_length=1)
+    document_id: str = Field(min_length=1)
+    kind: Literal["resume", "exercices", "quiz"]
+    text: str = Field(min_length=1)
+    scope: Scope
+    count: int = Field(default=5, ge=1, le=20)
 
 
 class NotebookIndexRequest(Wire):
@@ -633,6 +658,11 @@ class AnswerRequest(Wire):
     # répond dans ce contexte. Vide = question sur le cours entier.
     section_heading: str = Field(default="", max_length=300)
     history: List[TutorTurn] = Field(default_factory=list, max_length=20)
+    # Le cahier de l'élève, quand la question porte sur un cours qu'il a
+    # lui-même ajouté. Les deux vont ensemble : sans propriétaire, aucun
+    # cahier ne s'ouvre.
+    student_account_id: str = ""
+    notebook_document_id: str = ""
 
 
 class AnswerAccepted(Wire):

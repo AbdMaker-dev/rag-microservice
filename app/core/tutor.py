@@ -91,11 +91,52 @@ class Tutor:
     """L'orchestrateur : Lawal choisit quoi chercher, nous où il a le droit."""
 
     def __init__(
-        self, *, llm: LlmProvider, retriever: Retriever, settings: Settings
+        self,
+        *,
+        llm: LlmProvider,
+        retriever: Retriever,
+        settings: Settings,
+        notebooks=None,
+        embeddings=None,
     ) -> None:
         self._llm = llm
         self._retriever = retriever
         self._settings = settings
+        # Le cahier de l'élève, quand il en a un. Optionnel : le tuteur doit
+        # continuer de fonctionner pour un élève qui n'a jamais rien scanné.
+        self._notebooks = notebooks
+        self._embeddings = embeddings
+
+    async def _search_notebook(
+        self, *, question: str, student_account_id: str, document_id: str
+    ) -> List[Passage]:
+        """Les passages du cahier de CET élève — jamais de celui d'un autre.
+
+        Le propriétaire est passé au dépôt, qui le refuse vide. Rien ici ne
+        peut ouvrir le cahier de quelqu'un d'autre, même par erreur.
+        """
+
+        if self._embeddings is None:
+            return []
+        vectors = await self._embeddings.embed([question])
+        rows = await self._notebooks.search(
+            student_account_id=student_account_id,
+            embedding=vectors[0],
+            limit=4,
+        )
+        return [
+            Passage(
+                chunk_id=row["chunk_id"],
+                document_id=row["document_id"],
+                title=row["title"],
+                locator=row["locator"],
+                content=row["content"][:700],
+                language=row.get("language", "fr"),
+                score=1.0 - float(row.get("distance", 1.0)),
+            )
+            for row in rows
+            if row["document_id"] == document_id
+        ]
 
     async def answer(
         self,
@@ -105,10 +146,15 @@ class Tutor:
         course_id: str,
         section_heading: str = "",
         history: Optional[List[dict]] = None,
+        student_account_id: str = "",
+        notebook_document_id: str = "",
     ) -> TutorAnswer:
         queries: List[dict] = []
         warnings: List[str] = []
         passages: List[Passage] = []
+        # Les passages venant du CAHIER de l'élève, retenus à part : ils
+        # n'ont pas la même autorité qu'un cours validé, et il doit le voir.
+        notebook_ids: set = set()
         seen: set = set()
         budget = self._settings.answer_max_queries
 
@@ -145,6 +191,29 @@ class Tutor:
         # Une question posée depuis une section se cherche dans son contexte :
         # « la norme » ne veut pas dire la même chose selon le chapitre.
         probe = f"{section_heading} — {question}" if section_heading else question
+
+        # Le cahier D'ABORD quand la question porte sur un cours qu'il a
+        # lui-même ajouté : c'est SON cours, celui qu'il a sous les yeux.
+        # Le contenu validé vient ensuite, en appui — et les deux se
+        # distinguent dans les citations, parce qu'ils n'ont pas la même
+        # autorité : ses notes peuvent être fausses, le cours du prof non.
+        if notebook_document_id and student_account_id and self._notebooks:
+            found_notebook = await self._search_notebook(
+                question=probe,
+                student_account_id=student_account_id,
+                document_id=notebook_document_id,
+            )
+            fresh = [p for p in found_notebook if p.chunk_id not in seen]
+            seen.update(p.chunk_id for p in fresh)
+            notebook_ids.update(p.chunk_id for p in fresh)
+            passages.extend(fresh)
+            queries.append(
+                {"query": probe, "role": "cahier", "results": len(fresh),
+                 "fromModel": False}
+            )
+            if not fresh:
+                warnings.append("NOTEBOOK_NO_CONTENT")
+
         found = await search(probe, "cours-publie", from_model=False)
         if found == 0:
             warnings.append("NO_PUBLISHED_COURSE_CONTENT")
@@ -230,7 +299,7 @@ class Tutor:
                         for c in parsed.get("conceptes", [])
                         if str(c).strip()
                     ][:6],
-                    citations=_citations(passages),
+                    citations=_citations(passages, notebook_ids),
                     queries=queries,
                     warnings=warnings,
                 )
@@ -247,7 +316,7 @@ class Tutor:
                     text=plain,
                     check="",
                     concepts=[],
-                    citations=_citations(passages),
+                    citations=_citations(passages, notebook_ids),
                     queries=queries,
                     warnings=warnings,
                 )
@@ -335,13 +404,21 @@ def _wants_tutor_search(raw: str):
     return question, role if role in _TUTOR_ROLES else "cours-publie"
 
 
-def _citations(passages: List[Passage]) -> List[dict]:
+def _citations(
+    passages: List[Passage], notebook_ids: Optional[set] = None
+) -> List[dict]:
+    """Chaque extrait dit d'où il vient : du cahier de l'élève, ou du contenu
+    validé. Les deux n'ont pas la même autorité — ses propres notes peuvent
+    être fausses, et il doit pouvoir en tenir compte."""
+
+    notebook_ids = notebook_ids or set()
     return [
         {
             "label": f"S{index}",
             "documentId": passage.document_id,
             "title": passage.title,
             "locator": passage.locator,
+            "source": "cahier" if passage.chunk_id in notebook_ids else "valide",
         }
         for index, passage in enumerate(passages, start=1)
     ]

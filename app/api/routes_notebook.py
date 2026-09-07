@@ -16,8 +16,12 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from app.api.dependencies import require_service_token
+from app.config import Settings, get_settings
+from app.core.generation import CourseGenerator
 from app.models.schemas import (
+    GenerateAccepted,
     NotebookDeleteResponse,
+    NotebookGenerateRequest,
     NotebookIndexRequest,
     NotebookIndexResponse,
     NotebookProof,
@@ -128,3 +132,62 @@ async def delete(
         student_account_id=student_account_id, external_id=document_id
     )
     return NotebookDeleteResponse(document_id=document_id, deleted=deleted)
+
+
+# Ce que le modèle doit savoir avant de travailler sur un cahier : ce texte
+# n'est pas un cours de professeur relu et validé, c'est ce qu'un élève a
+# recopié à la main. Il peut être incomplet, abrégé, mal noté. La consigne
+# ferme la porte à la tentation de « compléter » — un quiz dont la réponse
+# n'est pas dans SES notes ne l'entraîne pas, il le décourage.
+_NOTEBOOK_INSTRUCTION = (
+    "Ce texte est le cours d'un élève, recopié à la main dans son cahier. "
+    "Il peut être incomplet ou abrégé. Travaille STRICTEMENT sur ce qu'il "
+    "contient : n'ajoute aucune notion qui n'y figure pas, même si elle "
+    "appartient au chapitre. Si le cours ne permet pas de produire ce qui "
+    "est demandé, dis-le au lieu de le compléter."
+)
+
+
+@router.post(
+    "/notebook/generate",
+    response_model=GenerateAccepted,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def generate(
+    body: NotebookGenerateRequest,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+) -> GenerateAccepted:
+    """Résumé, exercices ou quiz SUR le cours que l'élève a validé.
+
+    Asynchrone comme toute génération, et dans la file **élève** : c'est un
+    enfant qui attend devant son écran, pas un professeur qui prépare son
+    semestre. Notre file sert les élèves en premier — le statut se lit sur
+    `GET /generate/{jobId}`, comme pour un cours.
+    """
+
+    generator = CourseGenerator(
+        llm=request.app.state.llm,
+        retriever=request.app.state.retriever,
+        settings=settings,
+    )
+    job = request.app.state.jobs.submit(
+        lambda: generator.generate_blocks(
+            kind=body.kind,
+            text=body.text,
+            scope=body.scope,
+            count=body.count,
+            instruction=_NOTEBOOK_INSTRUCTION,
+        ),
+        lane="eleve",
+    )
+    logger.info(
+        "bloc de cahier lancé",
+        extra={
+            "requestId": body.request_id,
+            "job": job.id,
+            "kind": body.kind,
+            "documentId": body.document_id,
+        },
+    )
+    return GenerateAccepted(request_id=body.request_id, job_id=job.id)

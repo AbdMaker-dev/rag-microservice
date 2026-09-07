@@ -88,7 +88,11 @@ async def lifespan(app: FastAPI):
         settings=settings,
     )
     app.state.tutor = Tutor(
-        llm=app.state.llm, retriever=app.state.retriever, settings=settings
+        llm=app.state.llm,
+        retriever=app.state.retriever,
+        settings=settings,
+        notebooks=app.state.notebooks,
+        embeddings=embeddings,
     )
 
     logger.info(
