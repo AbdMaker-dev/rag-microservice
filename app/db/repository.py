@@ -204,7 +204,7 @@ class IndexRepository:
 
         row = await self._pool.fetchrow(
             """
-            SELECT external_id, course_id, title, source_reference, content,
+            SELECT external_id, course_id, role, title, source_reference, content,
                    characters, chunk_count, embedding_model, indexed_at,
                    country, subject, level, track, grade, curriculum_version, language
             FROM documents WHERE external_id = $1

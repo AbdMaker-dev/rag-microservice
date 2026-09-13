@@ -27,10 +27,17 @@ def _repository(request: Request) -> IndexRepository:
 
 
 def _summary(row: dict) -> DocumentSummary:
+    # `role` se lit, ne se devine pas. Il portait un défaut
+    # (`row.get("role", "support-cours")`) et la requête d'UN document ne
+    # sélectionnait pas la colonne : tout document était donc annoncé
+    # « support-cours », y compris un cours publié. Management s'en servait
+    # pour refuser la suppression d'un cours indexé — le refus n'a jamais
+    # pu tirer, et un vrai cours a été détruit le 13/09/2026 en le testant.
+    # Une clé absente doit crier, pas prendre une valeur plausible.
     return DocumentSummary(
         document_id=row["external_id"],
         course_id=row.get("course_id", ""),
-        role=row.get("role", "support-cours"),
+        role=row["role"],
         title=row["title"],
         source_reference=row["source_reference"] or "",
         characters=row["characters"],

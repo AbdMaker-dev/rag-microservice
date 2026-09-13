@@ -85,3 +85,35 @@ def test_la_recherche_filtre_par_niveau_et_serie():
     assert "($10::text = '' OR d.level = $10)" in sql
     assert "($11::text = '' OR d.track = $11)" in sql
     assert args[9] == "secondaire" and args[10] == "S2"
+
+
+class _RowPool:
+    """Un pool qui rend la ligne qu'on lui donne, et garde le SQL vu."""
+
+    def __init__(self, row):
+        self.row = row
+        self.queries = []
+
+    async def fetchrow(self, sql, *args):
+        self.queries.append((sql, args))
+        return self.row
+
+
+def test_un_document_lu_seul_porte_son_role():
+    """Le 13/09/2026 : la requête d'UN document ne sélectionnait pas `role`.
+
+    Conséquence réelle, pas théorique : `_summary` posait alors le défaut
+    « support-cours », management s'en servait pour refuser la suppression
+    d'un cours publié, le refus n'a jamais pu tirer — et le cours indexé de
+    « Similitudes directes » a été détruit en testant ce refus.
+    """
+
+    pool = _RowPool({"external_id": "doc-1", "role": "cours-publie"})
+    repo = IndexRepository(pool)
+    ligne = asyncio.run(repo.get_document("doc-1"))
+
+    sql, args = pool.queries[0]
+    assert "role" in sql, "la colonne role doit être sélectionnée"
+    assert "WHERE external_id = $1" in sql
+    assert args == ("doc-1",)
+    assert ligne["role"] == "cours-publie"
