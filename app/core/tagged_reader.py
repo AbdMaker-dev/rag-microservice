@@ -24,7 +24,9 @@ logger = logging.getLogger(__name__)
 
 # Types qui ouvrent un bloc de texte à part entière.
 _HEADINGS = {"H1": 1, "H2": 2, "H3": 3, "H4": 4, "H5": 5, "H6": 6, "H": 2}
-_BLOCKS = {"P", "LI", "LBody", "Caption", "Figure", "TOCI", "Note"}
+# « LBody » n'y est pas : le corps d'un item de liste rejoint son étiquette
+# (« 1. ») sur la même ligne, sauf s'il porte lui-même des paragraphes.
+_BLOCKS = {"P", "LI", "Caption", "Figure", "TOCI", "Note"}
 _TABLE = "Table"
 _ROW = "TR"
 _CELLS = {"TD", "TH"}
@@ -164,36 +166,96 @@ def _gather(node, page: Optional[int], numbers: Dict[int, int],
         return
     children = children.get_object()
 
-    # Le texte accroché directement à cet élément, quel que soit son type. On
-    # ne liste pas les types qui portent du contenu : un producteur peut
-    # envelopper ses paragraphes dans n'importe quoi — « NonStruct » couvre à
-    # lui seul la moitié de certains documents. Tout marqueur non émis ici
-    # serait du texte perdu.
-    direct: List[Tuple[int, int]] = []
+    # Un paragraphe n'est pas toujours d'un seul tenant : un mot en gras, un
+    # exposant, un lien sont des éléments à part entière dans l'arbre —
+    # « Span », ou « NonStruct » chez Chrome, qui y enveloppe CHAQUE
+    # changement de police. Les rendre comme des blocs coupait « l'affixe du
+    # point » en trois lignes. Ici, tout ce qui n'est pas un bloc — ni n'en
+    # contient — s'ajoute au texte courant, dans l'ordre du document ; seul
+    # un bloc (paragraphe, titre, tableau, item de liste) ferme le texte en
+    # cours et s'émet à part. Rien n'est perdu : un marqueur non listé finit
+    # toujours dans le texte de l'élément qui le porte.
+    run: List[Tuple[int, int]] = []
+
+    def flush() -> None:
+        body = _join(
+            texts[mark] for mark in run if mark in texts and texts[mark].strip()
+        )
+        if body:
+            out.append((run[0][0], body))
+        run.clear()
+
     for child in children if isinstance(children, list) else [children]:
         target = child.get_object() if hasattr(child, "get_object") else child
         if isinstance(target, int):
             if page is not None:
-                direct.append((page, target))
+                run.append((page, target))
         elif hasattr(target, "get") and str(target.get("/Type")) == "/MCR":
             own = target.get("/Pg")
             owner = _number_of(own, numbers) if own is not None else page
             if owner is not None:
-                direct.append((owner, int(target.get("/MCID", -1))))
+                run.append((owner, int(target.get("/MCID", -1))))
+        elif hasattr(target, "get") and target.get("/S") is not None:
+            if _is_block(target) or _holds_block(target, set()):
+                flush()
+                _gather(target, page, numbers, texts, out, seen)
+            else:
+                run.extend(_marks_of(target, page, numbers, set()))
+    flush()
 
-    if direct:
-        body = " ".join(
-            texts[mark] for mark in direct if mark in texts and texts[mark].strip()
-        ).strip()
-        if body:
-            out.append((direct[0][0], body))
 
-    # Puis les éléments enfants, chacun émettant ce qui lui est propre : un
-    # marqueur n'est rendu qu'une fois, au niveau où il est accroché.
+_NO_SPACE_AFTER = ("’", "'", "(", "[", "« ", "«")
+_NO_SPACE_BEFORE = (",", ".", ";", ":", ")", "]", "’", "'", " »", "»")
+
+
+def _join(parts) -> str:
+    """Recoller des fragments qui étaient un seul texte avant d'être tagués
+    séparément : pas d'espace après une apostrophe ni avant une virgule —
+    « l’affixe », « (u, v) », pas « l’ affixe », « ( u , v ) »."""
+
+    body = ""
+    for part in parts:
+        piece = part.strip()
+        if not piece:
+            continue
+        if not body or body.endswith(_NO_SPACE_AFTER) or piece.startswith(_NO_SPACE_BEFORE):
+            body += piece
+        else:
+            body += " " + piece
+    return body
+
+
+def _is_block(node) -> bool:
+    kind = str(node.get("/S", "")).lstrip("/")
+    return kind in _BLOCKS or kind in _HEADINGS or kind == _TABLE
+
+
+def _holds_block(node, seen: Set[int]) -> bool:
+    """Un conteneur — section, division, enveloppe — dont un descendant est un
+    bloc doit être parcouru bloc par bloc, jamais aplati en une ligne."""
+
+    try:
+        resolved = node.get_object()
+    except Exception:  # noqa: BLE001
+        return False
+    if id(resolved) in seen:
+        return False
+    seen.add(id(resolved))
+    if isinstance(resolved, list):
+        return any(_holds_block(child, seen) for child in resolved)
+    if not hasattr(resolved, "get"):
+        return False
+    children = resolved.get("/K")
+    if children is None:
+        return False
+    children = children.get_object()
     for child in children if isinstance(children, list) else [children]:
         target = child.get_object() if hasattr(child, "get_object") else child
-        if hasattr(target, "get") and target.get("/S") is not None:
-            _gather(target, page, numbers, texts, out, seen)
+        if not hasattr(target, "get") or target.get("/S") is None:
+            continue
+        if _is_block(target) or _holds_block(target, seen):
+            return True
+    return False
 
 
 def _render_table(node, page, numbers, texts) -> Tuple[str, Optional[int]]:
