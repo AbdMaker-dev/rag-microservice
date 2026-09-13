@@ -38,7 +38,7 @@ from typing import Dict, List, Optional, Tuple
 
 from app.config import Settings
 from app.core.llm import LlmProvider
-from app.core.retrieval import Passage, Retriever
+from app.core.retrieval import Passage, Retriever, figures_in
 from app.models.schemas import Scope
 
 logger = logging.getLogger(__name__)
@@ -324,6 +324,38 @@ def _wants_search(raw: str) -> Optional[Tuple[str, str]]:
     if not question:
         return None
     return question, nature if nature in _ROLES else "support-cours"
+
+
+def _place_figures(text: str, registry: Dict[str, Passage]) -> str:
+    """Poser les figures des passages cités, là où la section les cite.
+
+    Décision d'Alioune du 13/09/2026 (« 1 + 2 ») : le prof ne doit rien
+    avoir à placer dans le cas normal. Ce n'est pas l'IA qui devine : une
+    figure est ancrée dans un passage du document (son marqueur y est), la
+    section dit quels passages elle utilise (ses étiquettes). La règle :
+    chaque figure d'un passage cité s'insère après le PREMIER paragraphe qui
+    cite ce passage — sa propre ligne, au format `[FIGURE {id}]` que le
+    front affiche en image et que `verbalize` annonce à l'oral. Une fois
+    par section. Le prof retire ou déplace ; il ne cherche plus.
+    """
+
+    paragraphs = text.split("\n\n")
+    already = set(figures_in(text))
+    placed: List[str] = []
+    for index, paragraph in enumerate(paragraphs):
+        extra: List[str] = []
+        for label in _LABEL.findall(paragraph):
+            passage = registry.get(label.strip("[]"))
+            for figure in (passage.figures if passage else []):
+                if figure not in already:
+                    already.add(figure)
+                    extra.append(f"[FIGURE {figure}]")
+                    placed.append(figure)
+        if extra:
+            paragraphs[index] = paragraph + "\n\n" + "\n\n".join(extra)
+    if placed:
+        logger.info("figures placées", extra={"count": len(placed)})
+    return "\n\n".join(paragraphs)
 
 
 def _strip_control_blocks(text: str) -> str:
@@ -1074,6 +1106,8 @@ class CourseGenerator:
             retried = (await self._chat(messages)).strip()
             if _LABEL.search(retried):
                 text = retried
+
+        text = _place_figures(text, registry)
 
         cited = sorted(
             {label.strip("[]") for label in _LABEL.findall(text)}

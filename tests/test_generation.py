@@ -364,6 +364,64 @@ def test_une_section_seule_recoit_le_plan_et_les_resumes_valides():
     assert support["course_id"] == "cours-7"
 
 
+class RetrieverAvecFigures(FakeRetriever):
+    """Le premier support porte une figure ancrée, le second aucune."""
+
+    async def search(self, *, query, scope, limit, max_excerpt_characters,
+                     course_id=None, role=None):
+        self.calls.append({"query": query, "course_id": course_id, "role": role})
+        if role == "support-cours":
+            return [
+                Passage(chunk_id="s1", document_id="doc", title="Cours", locator="p. 3",
+                        content="Le triangle ABC… [FIGURE dded9a9f — p. 3]",
+                        language="fr", score=0.9, figures=["dded9a9f"]),
+                Passage(chunk_id="s2", document_id="doc", title="Cours", locator="p. 4",
+                        content="L'aire vaut (base × hauteur) / 2.",
+                        language="fr", score=0.8),
+            ]
+        return [_passage("1", "programme")]
+
+
+def test_la_figure_d_un_passage_cite_se_pose_apres_le_paragraphe_qui_le_cite():
+    # Décision « 1 + 2 » du 13/09/2026 : l'IA place, le prof corrige.
+    llm = ScriptedLlm([
+        "Une hauteur est une droite issue d'un sommet [S2].\n\n"
+        "Considérons le triangle ABC et sa hauteur AD [S1].\n\n"
+        "On retrouve la même hauteur plus loin [S1]."
+    ])
+
+    result = asyncio.run(_generator(llm, RetrieverAvecFigures()).write_one_section(
+        heading="Hauteurs", instruction="cours", scope=SCOPE, course_id="c",
+        strictness="grounded", plan_headings=["Hauteurs"]))
+
+    assert result.sections[0].text == (
+        "Une hauteur est une droite issue d'un sommet [S2].\n\n"
+        "Considérons le triangle ABC et sa hauteur AD [S1].\n\n"
+        "[FIGURE dded9a9f]\n\n"
+        "On retrouve la même hauteur plus loin [S1]."
+    )
+
+
+def test_une_figure_deja_placee_par_le_modele_ne_se_pose_pas_deux_fois():
+    llm = ScriptedLlm(["Le triangle [S1].\n\n[FIGURE dded9a9f]\n\nSuite [S1]."])
+
+    result = asyncio.run(_generator(llm, RetrieverAvecFigures()).write_one_section(
+        heading="Hauteurs", instruction="cours", scope=SCOPE, course_id="c",
+        strictness="grounded", plan_headings=["Hauteurs"]))
+
+    assert result.sections[0].text.count("[FIGURE dded9a9f]") == 1
+
+
+def test_une_figure_d_un_passage_non_cite_reste_ou_elle_est():
+    llm = ScriptedLlm(["L'aire vaut base fois hauteur sur deux [S2]."])
+
+    result = asyncio.run(_generator(llm, RetrieverAvecFigures()).write_one_section(
+        heading="Aire", instruction="cours", scope=SCOPE, course_id="c",
+        strictness="grounded", plan_headings=["Aire"]))
+
+    assert "[FIGURE" not in result.sections[0].text
+
+
 def test_une_section_se_revise_avec_sa_version_actuelle():
     llm = ScriptedLlm(["Version révisée, plus courte [S1]."])
 

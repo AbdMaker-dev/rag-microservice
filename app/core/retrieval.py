@@ -7,7 +7,8 @@ cherche jamais en dehors de ce que la plateforme lui a transmis.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 from typing import List, Optional, Sequence
 
 from app.core.embeddings import EmbeddingProvider
@@ -26,6 +27,23 @@ class Passage:
     content: str
     language: str
     score: float
+    # Les figures ancrées dans ce passage — relevées sur le contenu ENTIER
+    # du chunk, pas sur l'extrait : un marqueur en fin de chunk tomberait
+    # sous la coupe de l'extrait, et la figure disparaîtrait sans bruit.
+    figures: List[str] = field(default_factory=list)
+
+
+_FIGURE_MARK = re.compile(r"\[FIGURE\s+([^\s\]—]+)")
+
+
+def figures_in(content: str) -> List[str]:
+    """Les identifiants de figures d'un texte, dans l'ordre, sans doublon."""
+
+    seen: List[str] = []
+    for found in _FIGURE_MARK.findall(content):
+        if found not in seen:
+            seen.append(found)
+    return seen
 
 
 def _excerpt(content: str, maximum: int) -> str:
@@ -83,6 +101,7 @@ class Retriever:
                     title=row["title"],
                     locator=row["locator"],
                     content=_excerpt(row["content"], max_excerpt_characters),
+                    figures=figures_in(row["content"]),
                     language=row["language"],
                     score=round(score, 6),
                 )
