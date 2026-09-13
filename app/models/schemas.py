@@ -385,6 +385,20 @@ class ProposalChatResponse(Wire):
     rejected: List[RejectedEdit] = []
 
 
+class ProposalChatAccepted(Wire):
+    """Le tour est parti en file. L'état se lit sur `GET /generate/{jobId}`.
+
+    Asynchrone depuis le 13/09/2026 : le texte entier repart au modèle à
+    chaque tour, et 3 000 caractères ont pris 53 secondes en production.
+    Un chapitre de quarante pages dépasserait n'importe quel délai HTTP
+    raisonnable. Même file, même sondage, même `lost` que le reste — le
+    professeur voit sa place et peut quitter la page.
+    """
+
+    contract_version: Literal["1.0"] = CONTRACT_VERSION
+    job_id: str
+
+
 # --------------------------------------------------------------------- indexer
 
 
@@ -708,6 +722,13 @@ class GenerateStatus(Wire):
     assessment: Optional[AssessmentDraft] = None
     quiz: List[QuizQuestion] = []
     exercises: List[Exercise] = []
+    # Rendus par /proposal/chat — un tour de relecture. `reply` est ce que
+    # l'IA dit au professeur ; `edits` ce qu'elle propose de remplacer, situé
+    # et vérifié ; `rejected` ce qu'on a refusé de lui montrer, avec la
+    # raison. Trois champs vides sur tout autre job.
+    reply: Optional[str] = None
+    edits: List[ProposedEdit] = []
+    rejected: List[RejectedEdit] = []
     warnings: List[str] = []
     error: Optional[str] = None
 

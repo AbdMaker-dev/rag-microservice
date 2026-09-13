@@ -6,6 +6,7 @@ refuse d'observer une première fois sur un vrai cours.
 
 import pytest
 
+import asyncio
 import json
 
 from app.core.proposal import INCERTAIN, discuter, porteurs, proposer
@@ -298,3 +299,58 @@ async def test_la_tolerance_ne_rend_pas_un_passage_ambigu_acceptable():
 
     assert d.corrections == []
     assert "2 fois" in d.refusees[0]["raison"]
+
+
+# ─────────────── le tour de relecture est un JOB ───────────────
+
+
+def test_le_chat_part_en_file_et_son_resultat_se_lit_sur_le_job():
+    """Asynchrone depuis le 13/09 : 53 s mesurées pour 3 000 caractères,
+    contre 20 s de délai côté relais. Un chapitre entier dépasserait
+    n'importe quel délai HTTP — donc même file et même sondage que le reste.
+    """
+
+    import time
+
+    from fastapi.testclient import TestClient
+
+    from app.core.jobs import JobStore
+    from app.main import create_app
+
+    jeton = {"X-Service-Token": "test-secret-value-of-at-least-32-chars"}
+    chat = _Chat({
+        "reponse": "J'ai remis les espaces.",
+        "corrections": [
+            {"avant": "Son angle θ=arg(a) .", "apres": "Son angle θ = arg(a)."},
+            {"avant": "introuvable dans le texte", "apres": "x"},
+        ],
+    })
+
+    # Pas de lifespan : il ouvrirait la base. L'état utile se pose à la main.
+    app = create_app()
+    app.state.jobs = JobStore()
+    app.state.llm = chat
+    client = TestClient(app)
+
+    lance = client.post(
+        "/proposal/chat",
+        json={"requestId": "t", "text": TEXTE, "instruction": "corrige"},
+        headers=jeton,
+    )
+    assert lance.status_code == 202
+    job = lance.json()["jobId"]
+
+    for _ in range(60):
+        etat = client.get(f"/generate/{job}", headers=jeton).json()
+        if etat["status"] in ("done", "failed"):
+            break
+        time.sleep(0.05)
+
+    assert etat["status"] == "done", etat.get("error")
+    assert etat["reply"] == "J'ai remis les espaces."
+    assert len(etat["edits"]) == 1
+    assert etat["edits"][0]["position"] == TEXTE.index("Son angle")
+    # Le refus part AUSSI jusqu'au front : caché, il ferait croire que
+    # l'IA n'a rien trouvé.
+    assert len(etat["rejected"]) == 1
+    assert "ne se trouve pas" in etat["rejected"][0]["reason"]

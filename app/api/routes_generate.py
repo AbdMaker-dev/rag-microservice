@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.api.dependencies import require_service_token
 from app.config import Settings, get_settings
+from app.core.proposal import Discussion
 from app.core.generation import (
     AssessmentResult,
     BlocksDraft,
@@ -34,6 +35,8 @@ from app.models.schemas import (
     QuizQuestion,
     PlanChild,
     PlanItem,
+    ProposedEdit,
+    RejectedEdit,
     PlanRequest,
     SectionRequest,
     GenerateAccepted,
@@ -113,6 +116,31 @@ async def generation_status(job_id: str, request: Request) -> GenerateStatus:
             ],
             queries=plan.queries,
             warnings=plan.warnings,
+        )
+
+    if isinstance(job.result, Discussion):
+        # Un tour de relecture d'un document. Les trois champs partent tels
+        # quels jusqu'au front : `rejected` surtout — un refus caché ferait
+        # croire au professeur que l'IA n'a rien trouvé.
+        tour: Discussion = job.result
+        return GenerateStatus(
+            job_id=job.id,
+            status="done",
+            reply=tour.reponse,
+            edits=[
+                ProposedEdit(
+                    before=c.avant,
+                    after=c.apres,
+                    position=c.position,
+                    changed_symbols=c.symboles_modifies,
+                    warning=c.avertissement,
+                )
+                for c in tour.corrections
+            ],
+            rejected=[
+                RejectedEdit(before=r["avant"], after=r["apres"], reason=r["raison"])
+                for r in tour.refusees
+            ],
         )
 
     if isinstance(job.result, AssessmentResult):
