@@ -80,7 +80,7 @@ class OllamaEmbeddingProvider:
                 response = await self._client.post(
                     f"{self._base_url}/api/embed",
                     json=payload,
-                    timeout=self._settings.inference_timeout_s,
+                    timeout=self._settings.embedding_timeout_s,
                 )
                 response.raise_for_status()
                 body = response.json()
@@ -140,7 +140,7 @@ class VllmEmbeddingProvider:
         response = await self._client.post(
             f"{self._base_url}/v1/embeddings",
             json={"model": self.model, "input": list(texts)},
-            timeout=self._settings.inference_timeout_s,
+            timeout=self._settings.embedding_timeout_s,
         )
         response.raise_for_status()
         data = response.json().get("data", [])

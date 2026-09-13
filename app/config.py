@@ -54,6 +54,11 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     vllm_base_url: Optional[str] = None
     inference_timeout_s: float = Field(default=30.0, ge=1.0, le=300.0)
+    # L'embedding partage Ollama avec la rédaction, sur CPU. Mesuré le
+    # 13/09/2026 pendant qu'une section se rédigeait : 38 s pour un vecteur —
+    # et trois essais à 30 s faisaient échouer la publication d'un cours avec
+    # « service d'indexation indisponible ». Trois fois la mesure.
+    embedding_timeout_s: float = Field(default=120.0, ge=1.0, le=600.0)
 
     # --- Génération de cours ------------------------------------------------------
     # Rédiger prend plusieurs minutes sur CPU : le délai est par appel au
