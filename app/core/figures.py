@@ -74,21 +74,93 @@ def _diagonal(line: dict) -> bool:
     return abs(line["x1"] - line["x0"]) > 2 and abs(line["bottom"] - line["top"]) > 2
 
 
-def collect_regions(number: int, page) -> List[FigureRegion]:
+# Un mot au plus long d'un mot d'étiquette : « A », « O », « x », « 30° ».
+# Au-delà, on n'est plus dans une figure légendée mais dans du texte encadré.
+_MOTS_ETIQUETTE_MAX = 12
+
+
+def _mots_dans(mots, x0: float, top: float, x1: float, bottom: float) -> int:
+    """Combien de mots tombent dans cette zone.
+
+    Sert à distinguer une FIGURE d'un TABLEAU quand les deux sont faits de
+    traits droits : une figure est ÉTIQUETÉE — A, B, O, x, 30° — un tableau
+    est REMPLI. C'est la différence qu'on peut mesurer ; l'orientation des
+    traits ne la donne pas.
+    """
+
+    total = 0
+    for mot in mots or ():
+        cx = (float(mot["x0"]) + float(mot["x1"])) / 2
+        cy = (float(mot["top"]) + float(mot["bottom"])) / 2
+        if x0 <= cx <= x1 and top <= cy <= bottom:
+            total += 1
+    return total
+
+
+def collect_regions(number: int, page, words=None) -> List[FigureRegion]:
     """Les zones dessinées d'une page pdfplumber, agrégées et filtrées.
 
     Appelée pendant la passe de lecture unique : les listes de primitives y
     sont déjà construites, cette collecte ne rouvre rien.
+
+    ⚠️ CORRECTION DU 13/09/2026. La règle ne comptait que les courbes, les
+    traits OBLIQUES et les images : trois d'entre eux faisaient une figure,
+    et les traits droits n'étaient jamais comptés. Mesuré sur trois PDF de
+    contrôle passés dans l'extraction du serveur :
+
+        une étoile, 5 traits obliques        → capturée
+        un triangle, 2 côtés obliques        → RIEN
+        un rectangle et des axes, 0 oblique  → RIEN
+
+    Or un triangle, un rectangle, des axes, un tableau de variations, un
+    circuit de PC sont le quotidien d'un support scolaire. Ils
+    disparaissaient en silence.
+
+    Les traits droits comptent donc, à deux conditions qui écartent ce qu'on
+    voulait écarter au départ — les filets de tableau et les soulignés :
+
+      - le groupe doit porter de l'horizontal ET du vertical, donc former un
+        cadre ; un empilement de traits horizontaux reste un tableau ;
+      - il doit contenir peu de mots. Une figure est étiquetée, un tableau
+        est rempli.
+
+    Et on préfère capturer de trop : la décision produit est écrite depuis le
+    31/08 — « il peut rester des captures inutiles, c'est le prof qui
+    tranche ». Une figure manquée disparaît sans bruit ; une capture en trop
+    se jette d'un clic.
     """
 
-    boxes = []  # [x0, top, x1, bottom, has_image, count]
+    # [x0, top, x1, bottom, has_image, francs, horizontaux, verticaux]
+    # « francs » = ce qui suffisait déjà : courbes, obliques, images.
+    boxes = []
     for curve in page.curves:
-        boxes.append([curve["x0"], curve["top"], curve["x1"], curve["bottom"], False, 1])
+        boxes.append(
+            [curve["x0"], curve["top"], curve["x1"], curve["bottom"], False, 1, 0, 0]
+        )
     for line in page.lines:
+        horizontal = abs(line["bottom"] - line["top"]) <= 2
+        vertical = abs(line["x1"] - line["x0"]) <= 2
         if _diagonal(line):
-            boxes.append([line["x0"], line["top"], line["x1"], line["bottom"], False, 1])
+            boxes.append(
+                [line["x0"], line["top"], line["x1"], line["bottom"], False, 1, 0, 0]
+            )
+        elif horizontal or vertical:
+            boxes.append(
+                [
+                    line["x0"],
+                    line["top"],
+                    line["x1"],
+                    line["bottom"],
+                    False,
+                    0,
+                    1 if horizontal else 0,
+                    1 if vertical else 0,
+                ]
+            )
     for image in page.images:
-        boxes.append([image["x0"], image["top"], image["x1"], image["bottom"], True, 1])
+        boxes.append(
+            [image["x0"], image["top"], image["x1"], image["bottom"], True, 1, 0, 0]
+        )
     if not boxes:
         return []
 
@@ -108,6 +180,8 @@ def collect_regions(number: int, page) -> List[FigureRegion]:
                     other[3] = max(other[3], box[3])
                     other[4] = other[4] or box[4]
                     other[5] += box[5]
+                    other[6] += box[6]
+                    other[7] += box[7]
                     merged = True
                     break
             else:
@@ -116,13 +190,31 @@ def collect_regions(number: int, page) -> List[FigureRegion]:
 
     regions = []
     page_area = float(page.width) * float(page.height)
-    for x0, top, x1, bottom, has_image, count in boxes:
+    for x0, top, x1, bottom, has_image, francs, horiz, verts in boxes:
         width, height = x1 - x0, bottom - top
         if width < _MIN_WIDTH or height < _MIN_HEIGHT:
             continue
-        if not has_image and count < 3:
-            continue
         if width * height > _MAX_PAGE_SHARE * page_area:
+            continue
+
+        if has_image:
+            # Une image incorporée est une figure, quel que soit le reste.
+            pass
+        elif francs >= 3:
+            # Courbes et obliques : la règle d'origine, inchangée.
+            pass
+        elif (
+            horiz >= 1
+            and verts >= 1
+            and francs + horiz + verts >= 3
+            and _mots_dans(words, x0, top, x1, bottom) <= _MOTS_ETIQUETTE_MAX
+        ):
+            # Un CADRE peu rempli : triangle rectangle, axes, schéma en
+            # boîtes, tableau de variations. Les deux conditions ensemble
+            # écartent le filet de tableau (pas de vertical) et le tableau
+            # bordé (trop de mots).
+            pass
+        else:
             continue
         regions.append(
             FigureRegion(

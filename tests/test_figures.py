@@ -66,7 +66,10 @@ _FIGURE = (
     "180 610 m 210 650 250 650 280 610 c S "
 )
 
-# Des filets de tableau : traits horizontaux et verticaux, rien d'autre.
+# Un tableau : des filets ET son contenu. Le contenu n'est pas un détail de
+# mise en scène — c'est LUI qui distingue un tableau d'un schéma en boîtes
+# (13/09/2026). Une grille vide et un diagramme sont géométriquement
+# identiques ; voir `test_une_grille_vide_est_capturee`.
 _TABLE = (
     "1 w "
     "100 600 m 400 600 l S "
@@ -75,12 +78,21 @@ _TABLE = (
     "100 400 m 100 600 l S "
     "250 400 m 250 600 l S "
     "400 400 m 400 600 l S "
+    "BT /F1 9 Tf 110 570 Td (Periode une colonne une) Tj ET "
+    "BT /F1 9 Tf 260 570 Td (Periode une colonne deux) Tj ET "
+    "BT /F1 9 Tf 110 470 Td (Periode deux colonne une) Tj ET "
+    "BT /F1 9 Tf 260 470 Td (Periode deux colonne deux) Tj ET "
+    "BT /F1 9 Tf 110 430 Td (Periode trois colonne une) Tj ET "
+    "BT /F1 9 Tf 260 430 Td (Periode trois colonne deux) Tj ET "
 )
 
 
 def _regions(payload: bytes):
     with pdfplumber.open(io.BytesIO(payload)) as document:
-        return collect_regions(1, document.pages[0])
+        page = document.pages[0]
+        # Les mots comme dans la vraie lecture : ils séparent une figure
+        # étiquetée d'un tableau rempli.
+        return collect_regions(1, page, page.extract_words())
 
 
 def test_un_dessin_veritable_est_detecte():
@@ -178,3 +190,90 @@ def test_extract_rend_les_figures_dans_la_reponse():
         assert "[FIGURE f1 — p. 1]" in body["text"]
     else:
         pytest.skip("PDF synthétique sans police refusé par le lecteur")
+
+
+# ─────────── ce que la règle d'origine laissait passer (13/09/2026) ───────────
+#
+# Mesuré sur le serveur avant correction : une étoile à cinq traits obliques
+# était capturée, un triangle à deux côtés obliques ne l'était pas, un
+# rectangle avec des axes non plus. Seuls les obliques, les courbes et les
+# images comptaient. Or ce sont les figures les plus ordinaires d'un support
+# scolaire — et elles disparaissaient sans un mot.
+
+_TRIANGLE_DEUX_OBLIQUES = """2 w
+120 560 m 320 560 l S
+120 560 m 220 700 l S
+220 700 m 320 560 l S
+220 700 m 220 560 l S
+"""
+
+_CADRE_ET_AXES = """2 w
+120 560 m 320 560 l S
+320 560 m 320 700 l S
+320 700 m 120 700 l S
+120 700 m 120 560 l S
+120 540 m 340 540 l S
+120 540 m 120 720 l S
+"""
+
+
+def _tableau_borde_rempli() -> str:
+    """Quatre horizontales, quatre verticales, et du texte dans chaque case."""
+
+    traits = [f"120 {y} m 420 {y} l S" for y in (700, 660, 620, 580)]
+    traits += [f"{x} 580 m {x} 700 l S" for x in (120, 220, 320, 420)]
+    mots = [
+        f"BT /F1 9 Tf {x} {y} Td (Periode {r} colonne {c}) Tj ET"
+        for r, y in enumerate((675, 635, 595), start=1)
+        for c, x in enumerate((130, 230, 330), start=1)
+    ]
+    return "2 w\n" + "\n".join(traits + mots) + "\n"
+
+
+def test_un_triangle_a_deux_cotes_obliques_est_capture():
+    """Le cas qui manquait : deux obliges seulement, et pourtant un triangle."""
+
+    assert len(_regions(_pdf(_TRIANGLE_DEUX_OBLIQUES))) == 1
+
+
+def test_un_cadre_et_des_axes_sont_captures():
+    """Zéro oblique : rectangle, axes, tableau de variations, schéma en boîtes."""
+
+    assert len(_regions(_pdf(_CADRE_ET_AXES))) == 1
+
+
+def test_un_tableau_borde_et_rempli_n_est_toujours_pas_une_figure():
+    """Le garde-fou qui rend la nouvelle règle tenable.
+
+    Un tableau bordé porte lui aussi de l'horizontal ET du vertical. Ce qui
+    l'en distingue se mesure : une figure est ÉTIQUETÉE (A, O, x, 30°), un
+    tableau est REMPLI.
+    """
+
+    assert _regions(_pdf(_tableau_borde_rempli())) == []
+
+
+def test_une_grille_vide_est_capturee():
+    """Décision assumée du 13/09/2026, pas un défaut.
+
+    Une grille SANS contenu et un schéma en boîtes sont géométriquement
+    identiques : mêmes horizontales, mêmes verticales, aucun mot. Rien ne
+    permet de les séparer, et il faut donc choisir lequel des deux risques
+    on prend.
+
+    On capture. La règle produit est écrite depuis le 31/08 — « il peut
+    rester des captures inutiles, c'est le prof qui tranche » — et les deux
+    erreurs ne coûtent pas le même prix : une capture en trop se jette d'un
+    clic, une figure manquée disparaît sans que personne ne l'apprenne.
+    """
+
+    grille = (
+        "1 w "
+        "100 600 m 400 600 l S "
+        "100 500 m 400 500 l S "
+        "100 400 m 400 400 l S "
+        "100 400 m 100 600 l S "
+        "250 400 m 250 600 l S "
+        "400 400 m 400 600 l S "
+    )
+    assert len(_regions(_pdf(grille))) == 1

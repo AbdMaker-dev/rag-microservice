@@ -346,9 +346,12 @@ def read_pdf_document(payload: bytes, repair: bool = True) -> PdfReading:
                 measure_page(number, page, words, coverages, needing_ocr, ruled)
 
                 # Les primitives de dessin sont déjà parsées à ce stade : la
-                # collecte des figures ne coûte que leur agrégation.
+                # collecte des figures ne coûte que leur agrégation. Les MOTS
+                # lui servent à séparer une figure d'un tableau bordé — une
+                # figure est étiquetée, un tableau est rempli — et ils sont
+                # déjà là, mesurés une ligne plus haut.
                 try:
-                    figure_regions.extend(collect_regions(number, page))
+                    figure_regions.extend(collect_regions(number, page, words))
                 except Exception:  # noqa: BLE001
                     logger.warning("figures illisibles sur une page")
 
