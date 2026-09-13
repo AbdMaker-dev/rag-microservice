@@ -326,6 +326,38 @@ def _wants_search(raw: str) -> Optional[Tuple[str, str]]:
     return question, nature if nature in _ROLES else "support-cours"
 
 
+# Ce que la fenêtre doit garder hors du texte du cours : la consigne du bloc
+# (~600 tokens) et la réponse — jusqu'à 3 000 tokens pour des exercices
+# corrigés. Le reste est pour le cours, à trois caractères par token, la
+# même estimation que le garde-fou de `_chat`.
+_BLOCKS_RESERVED_TOKENS = 3_800
+
+
+def _blocks_budget_characters(context_tokens: int) -> int:
+    return max(1_500, (context_tokens - _BLOCKS_RESERVED_TOKENS) * 3)
+
+
+def _split_course(text: str, budget: int) -> List[str]:
+    """Découper un cours en parties qui tiennent, sur les frontières de
+    paragraphes. Un cours qui tient rend une seule partie : lui-même."""
+
+    if len(text) <= budget:
+        return [text]
+    parts: List[str] = []
+    current: List[str] = []
+    size = 0
+    for paragraph in text.split("\n\n"):
+        piece = len(paragraph) + 2
+        if current and size + piece > budget:
+            parts.append("\n\n".join(current))
+            current, size = [], 0
+        current.append(paragraph)
+        size += piece
+    if current:
+        parts.append("\n\n".join(current))
+    return parts
+
+
 def _place_figures(text: str, registry: Dict[str, Passage]) -> str:
     """Poser les figures des passages cités, là où la section les cite.
 
@@ -1144,7 +1176,74 @@ class CourseGenerator:
         une question de quiz dont la réponse n'est pas dans le cours est une
         question piège, pas une question d'entraînement. Le prof relit et
         valide le bloc comme une section.
+
+        Un cours entier ne tient pas toujours dans la fenêtre du modèle :
+        constaté le 13/09/2026 sur deux cours de dix sections (8 600 et
+        9 800 tokens pour 8 192), les trois blocs échouaient. Le cours est
+        alors découpé en parties qui tiennent, chaque partie produit sa
+        part, et le résumé final fusionne les résumés partiels. Un cours
+        court ne passe jamais par là.
         """
+
+        budget = _blocks_budget_characters(self._settings.generation_context_tokens)
+        parts = _split_course(text, budget)
+        if len(parts) <= 1:
+            return await self._blocks_once(
+                kind=kind, text=text, scope=scope, count=count, instruction=instruction
+            )
+
+        warnings = [f"COURSE_SPLIT_FOR_BLOCKS:{len(parts)}"]
+        logger.info("cours découpé pour les blocs", extra={"parts": len(parts), "kind": kind})
+
+        if kind == "resume":
+            partials = []
+            for part in parts:
+                draft = await self._blocks_once(
+                    kind="resume", text=part, scope=scope, count=count, instruction=instruction
+                )
+                partials.append(draft.summary)
+            final = await self._blocks_once(
+                kind="resume",
+                text="\n\n".join(partials),
+                scope=scope,
+                count=count,
+                instruction=(
+                    "Le texte fourni est déjà une suite de résumés partiels du "
+                    "cours, dans l'ordre : fusionne-les en un seul résumé, sans "
+                    "répétition et sans rien ajouter."
+                    + (f" {instruction}" if instruction else "")
+                ),
+            )
+            return BlocksDraft(
+                kind=kind, summary=final.summary, warnings=warnings + final.warnings
+            )
+
+        per_part = -(-count // len(parts))  # plafond : chaque partie a sa part
+        quiz: List[dict] = []
+        exercises: List[dict] = []
+        for part in parts:
+            draft = await self._blocks_once(
+                kind=kind, text=part, scope=scope, count=per_part, instruction=instruction
+            )
+            quiz.extend(draft.quiz)
+            exercises.extend(draft.exercises)
+            for warning in draft.warnings:
+                if warning not in warnings:
+                    warnings.append(warning)
+        return BlocksDraft(
+            kind=kind, quiz=quiz[:count], exercises=exercises[:count], warnings=warnings
+        )
+
+    async def _blocks_once(
+        self,
+        *,
+        kind: str,
+        text: str,
+        scope: Scope,
+        count: int = 5,
+        instruction: str = "",
+    ) -> BlocksDraft:
+        """Un bloc depuis UN texte qui tient dans la fenêtre du modèle."""
 
         if kind == "resume":
             demand = (

@@ -569,6 +569,80 @@ def test_une_demande_de_recherche_melee_au_texte_est_bien_vue():
     assert "interprétation" in wanted[0] or "relation" in wanted[0]
 
 
+def _generator_fenetre(llm, context_tokens):
+    settings = get_settings().model_copy(update={"generation_context_tokens": context_tokens})
+    return CourseGenerator(llm=llm, retriever=FakeRetriever(), settings=settings)
+
+
+def _cours_long(sections=10, taille=1_500):
+    return "\n\n".join(
+        f"## Section {i}\n\n" + ("Le produit scalaire de deux vecteurs. " * (taille // 38))
+        for i in range(1, sections + 1)
+    )
+
+
+def test_un_cours_qui_tient_produit_son_bloc_en_un_seul_appel():
+    llm = ScriptedLlm([json.dumps({"resume": "Résumé direct."})])
+
+    draft = asyncio.run(_generator_fenetre(llm, 32_768).generate_blocks(
+        kind="resume", text=_cours_long(), scope=SCOPE))
+
+    assert draft.summary == "Résumé direct."
+    assert len(llm.exchanges) == 1
+    assert draft.warnings == []
+
+
+def test_un_cours_trop_long_est_decoupe_et_son_resume_fusionne():
+    # Constaté le 13/09/2026 : deux cours de dix sections, 8 600 et 9 800
+    # tokens pour une fenêtre de 8 192 — les trois blocs échouaient.
+    llm = ScriptedLlm([
+        json.dumps({"resume": "Partie A."}),
+        json.dumps({"resume": "Partie B."}),
+        json.dumps({"resume": "A puis B, fusionnés."}),
+    ])
+
+    draft = asyncio.run(_generator_fenetre(llm, 8_192).generate_blocks(
+        kind="resume", text=_cours_long(), scope=SCOPE))
+
+    assert draft.summary == "A puis B, fusionnés."
+    assert draft.warnings == ["COURSE_SPLIT_FOR_BLOCKS:2"]
+    assert len(llm.exchanges) == 3
+    # Aucun appel ne dépasse la fenêtre : c'est tout l'objet du découpage.
+    for messages in llm.exchanges:
+        assert sum(len(m["content"]) for m in messages) // 3 <= 8_192
+    # La fusion reçoit les résumés partiels, dans l'ordre, et la consigne le dit.
+    fusion = llm.exchanges[2]
+    assert "Partie A.\n\nPartie B." in fusion[1]["content"]
+    assert "résumés partiels" in fusion[0]["content"]
+
+
+def test_un_quiz_sur_un_cours_decoupe_prend_sa_part_dans_chaque_partie():
+    def q(n):
+        return {"question": f"Q{n} ?", "choix": ["a", "b", "c", "d"], "reponse": 1,
+                "explication": "…"}
+    llm = ScriptedLlm([
+        json.dumps({"questions": [q(1), q(2), q(3)]}),
+        json.dumps({"questions": [q(4), q(5), q(6)]}),
+    ])
+
+    draft = asyncio.run(_generator_fenetre(llm, 8_192).generate_blocks(
+        kind="quiz", text=_cours_long(), scope=SCOPE, count=5))
+
+    assert [x["question"] for x in draft.quiz] == ["Q1 ?", "Q2 ?", "Q3 ?", "Q4 ?", "Q5 ?"]
+    # Chaque partie s'est vu demander sa part : ⌈5/2⌉ = 3.
+    assert "QUIZ de 3 questions" in llm.exchanges[0][0]["content"]
+
+
+def test_le_decoupage_respecte_les_paragraphes():
+    from app.core.generation import _split_course
+
+    texte = "\n\n".join(["a" * 400, "b" * 400, "c" * 400])
+    parts = _split_course(texte, 900)
+
+    assert parts == ["a" * 400 + "\n\n" + "b" * 400, "c" * 400]
+    assert _split_course(texte, 5_000) == [texte]
+
+
 def test_un_bloc_de_controle_ne_finit_jamais_dans_le_cours():
     """Le filet : quoi qu'il arrive en amont, la section rendue au
     professeur ne porte pas de JSON de contrôle. Le cours du 01/09 en
