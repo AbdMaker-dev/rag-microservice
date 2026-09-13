@@ -277,12 +277,47 @@ class Discussion:
     refusees: List[dict]
 
 
-def _situer(texte: str, avant: str) -> tuple[Optional[int], Optional[str]]:
-    """Où se trouve ce passage — et seulement s'il s'y trouve une seule fois."""
+def _aplatir(texte: str) -> tuple[str, List[int]]:
+    """Le texte avec ses blancs écrasés, et la carte vers les vrais index.
 
-    if not avant:
+    Le premier essai réel l'a montré tout de suite : le texte extrait dit
+    « ➢\\n\\nSon angle θ=arg(a) . » et le modèle cite « ➢ Son angle θ=arg(a) . ».
+    Un œil humain lit la même chose, `str.count` non. Refuser pour des
+    caractères invisibles punirait une demande légitime.
+
+    Alors la RECHERCHE tolère les blancs, et le REMPLACEMENT reste exact :
+    on retrouve les vraies bornes dans le texte d'origine et c'est ce
+    passage-là, au caractère près, qu'on rend au professeur.
+    """
+
+    plat: List[str] = []
+    carte: List[int] = []
+    i, n = 0, len(texte)
+    while i < n:
+        if texte[i].isspace():
+            j = i
+            while j < n and texte[j].isspace():
+                j += 1
+            plat.append(" ")
+            carte.append(i)
+            i = j
+        else:
+            plat.append(texte[i])
+            carte.append(i)
+            i += 1
+    return "".join(plat), carte
+
+
+def _situer(texte: str, avant: str) -> tuple[Optional[tuple[int, int]], Optional[str]]:
+    """Les bornes de ce passage — s'il s'y trouve, et une seule fois."""
+
+    if not avant.strip():
         return None, "Passage vide."
-    occurrences = texte.count(avant)
+
+    plat, carte = _aplatir(texte)
+    aiguille = _aplatir(avant)[0].strip()
+
+    occurrences = plat.count(aiguille)
     if occurrences == 0:
         return None, (
             "Ce passage ne se trouve pas dans le texte — le modèle l'a cité "
@@ -293,7 +328,10 @@ def _situer(texte: str, avant: str) -> tuple[Optional[int], Optional[str]]:
             f"Ce passage apparaît {occurrences} fois : impossible de savoir "
             "lequel corriger."
         )
-    return texte.index(avant), None
+
+    debut_plat = plat.index(aiguille)
+    fin_plat = debut_plat + len(aiguille)
+    return (carte[debut_plat], carte[fin_plat - 1] + 1), None
 
 
 async def discuter(
@@ -336,12 +374,17 @@ async def discuter(
     retenues: List[Correction] = []
     refusees: List[dict] = []
     for brute in charge.get("corrections") or []:
-        avant = str(brute.get("avant", ""))
+        cite = str(brute.get("avant", ""))
         apres = str(brute.get("apres", ""))
-        position, raison = _situer(texte, avant)
+        bornes, raison = _situer(texte, cite)
         if raison is not None:
-            refusees.append({"avant": avant, "apres": apres, "raison": raison})
+            refusees.append({"avant": cite, "apres": apres, "raison": raison})
             continue
+        # Le passage RÉEL, tel qu'il est dans le texte — pas la citation du
+        # modèle. C'est celui-là que l'écran remplacera.
+        debut, fin = bornes
+        avant = texte[debut:fin]
+        position = debut
         if avant == apres:
             continue
         bouges = _difference(avant, apres)

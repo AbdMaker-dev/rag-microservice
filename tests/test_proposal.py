@@ -260,3 +260,41 @@ async def test_une_reponse_illisible_ne_casse_pas_l_ecran():
     d = await discuter(_Casse({}), TEXTE, "corrige")
     assert d.corrections == []
     assert "reformulez" in d.reponse
+
+
+@pytest.mark.asyncio
+async def test_la_citation_tolere_les_blancs_mais_le_passage_rendu_est_exact():
+    """Premier essai réel, 13/09 : le texte dit « ➢\\n\\nSon angle θ=arg(a) . »
+    et le modèle cite « ➢ Son angle θ=arg(a) . ». Même chose pour un œil,
+    pas pour `str.count`. On tolère à la recherche, jamais au remplacement.
+    """
+
+    texte = "Un titre\n\n➢\n\nSon angle θ=arg(a) .\n\nLa suite."
+    chat = _Chat({
+        "reponse": "Corrigé.",
+        "corrections": [
+            {"avant": "➢ Son angle θ=arg(a) .", "apres": "➢ Son angle θ = arg(a)."}
+        ],
+    })
+    d = await discuter(chat, texte, "remets les espaces")
+
+    assert d.refusees == []
+    c = d.corrections[0]
+    # Le passage rendu est celui du TEXTE, sauts de ligne compris.
+    assert c.avant == "➢\n\nSon angle θ=arg(a) ."
+    assert texte[c.position : c.position + len(c.avant)] == c.avant
+
+
+@pytest.mark.asyncio
+async def test_la_tolerance_ne_rend_pas_un_passage_ambigu_acceptable():
+    """Écraser les blancs ne doit pas fabriquer d'unicité."""
+
+    texte = "le centre\n\nle  centre\n"
+    chat = _Chat({
+        "reponse": "ok",
+        "corrections": [{"avant": "le centre", "apres": "le point"}],
+    })
+    d = await discuter(chat, texte, "renomme")
+
+    assert d.corrections == []
+    assert "2 fois" in d.refusees[0]["raison"]
