@@ -31,6 +31,7 @@ sens et la prose l'habille.
 
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
 from collections import Counter
@@ -40,6 +41,16 @@ from typing import List, Optional, Protocol, Sequence
 
 class _Llm(Protocol):
     async def complete(self, system: str, user: str) -> str: ...
+
+    async def chat(
+        self,
+        messages: List[dict],
+        *,
+        timeout: float,
+        num_ctx: int,
+        num_predict: int,
+        schema: Optional[dict] = None,
+    ) -> str: ...
 
 
 # Ce que le modèle répond quand il ne sait pas. Court, littéral, et
@@ -182,3 +193,176 @@ async def proposer(
         else None
     )
     return Proposition(passage, reponse, True, False, bouges, avertissement)
+
+
+# ─────────────────────────── LE CHAT DE RELECTURE ───────────────────────────
+#
+# Décision d'Alioune du 13/09/2026 : le professeur doit pouvoir DIRE ce qu'il
+# veut changer — « à la partie sur le centre, remplace θ par l'angle » — au
+# lieu de sélectionner un passage à la souris. Pour comprendre « cette
+# partie », le modèle a besoin du texte ENTIER.
+#
+# Mais lui donner le texte entier et lui demander de le corriger, c'est
+# exactement ce qui a produit les formules fausses du 29/08. Alors il voit
+# tout et ne rend que des REMPLACEMENTS CIBLÉS : `avant` / `après`. Trois
+# vérifications déterministes suivent, et aucune ne fait confiance au modèle :
+#
+#   - `avant` doit se trouver TEL QUEL dans le texte, sinon la correction
+#     désigne un endroit qui n'existe pas — le modèle a cité de mémoire ;
+#   - `avant` doit s'y trouver UNE SEULE fois, sinon on ne sait pas laquelle
+#     il vise, et appliquer au hasard serait pire que refuser ;
+#   - les symboles porteurs sont comparés, comme pour une proposition simple.
+#
+# Le texte n'est jamais modifié ici. On rend au professeur ce qui changerait.
+
+_CORRECTIONS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "reponse": {"type": "string"},
+        "corrections": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "avant": {"type": "string"},
+                    "apres": {"type": "string"},
+                },
+                "required": ["avant", "apres"],
+            },
+        },
+    },
+    "required": ["reponse", "corrections"],
+}
+
+_CONSIGNE_CHAT = """Tu aides un professeur à relire un texte extrait d'un PDF.
+
+Tu reçois le texte entier pour COMPRENDRE de quoi il parle. Tu ne le
+réécris jamais. Tu réponds par des remplacements ciblés.
+
+Pour chaque correction :
+- `avant` : le passage EXACT tel qu'il apparaît dans le texte, copié
+  caractère pour caractère. Ne le cite pas de mémoire, relis-le.
+- `apres` : ce par quoi le remplacer.
+
+Règles :
+- n'invente aucun contenu, ne complète pas ce qui manque ;
+- ne change un chiffre, un symbole ou une formule QUE si le professeur te
+  le demande explicitement ;
+- si tu n'as pas compris ce qu'il veut, rends `corrections` vide et
+  demande-lui de préciser dans `reponse` ;
+- `reponse` s'adresse au professeur, en français, brièvement.
+
+Un texte laissé tel quel est préférable à un texte faux."""
+
+
+@dataclass(frozen=True)
+class Correction:
+    avant: str
+    apres: str
+    # Où le passage commence dans le texte — pour que l'écran le montre.
+    position: int
+    symboles_modifies: List[str]
+    avertissement: Optional[str]
+
+
+@dataclass(frozen=True)
+class Discussion:
+    """Ce que le tour de chat produit. Rien n'est appliqué."""
+
+    reponse: str
+    corrections: List[Correction]
+    # Ce que le modèle a proposé et qu'on a refusé, avec la raison. Montré
+    # au professeur : un refus silencieux lui ferait croire que l'IA n'a
+    # rien trouvé.
+    refusees: List[dict]
+
+
+def _situer(texte: str, avant: str) -> tuple[Optional[int], Optional[str]]:
+    """Où se trouve ce passage — et seulement s'il s'y trouve une seule fois."""
+
+    if not avant:
+        return None, "Passage vide."
+    occurrences = texte.count(avant)
+    if occurrences == 0:
+        return None, (
+            "Ce passage ne se trouve pas dans le texte — le modèle l'a cité "
+            "de mémoire au lieu de le relire."
+        )
+    if occurrences > 1:
+        return None, (
+            f"Ce passage apparaît {occurrences} fois : impossible de savoir "
+            "lequel corriger."
+        )
+    return texte.index(avant), None
+
+
+async def discuter(
+    llm: _Llm,
+    texte: str,
+    consigne: str,
+    *,
+    historique: Sequence[dict] = (),
+    timeout: float = 180.0,
+    num_ctx: int = 8192,
+    num_predict: int = 2048,
+) -> Discussion:
+    """Un tour de discussion sur le texte extrait. N'applique rien."""
+
+    messages = [{"role": "system", "content": _CONSIGNE_CHAT}]
+    for tour in historique:
+        role = "assistant" if tour.get("role") in ("ia", "assistant") else "user"
+        messages.append({"role": role, "content": str(tour.get("content", ""))})
+    messages.append(
+        {
+            "role": "user",
+            "content": f"Texte extrait :\n---\n{texte}\n---\n\nDemande : {consigne}",
+        }
+    )
+
+    brut = await llm.chat(
+        messages,
+        timeout=timeout,
+        num_ctx=num_ctx,
+        num_predict=num_predict,
+        schema=_CORRECTIONS_SCHEMA,
+    )
+    try:
+        charge = json.loads(brut)
+    except (json.JSONDecodeError, TypeError):
+        return Discussion(
+            "Je n'ai pas su répondre à cette demande — reformulez-la.", [], []
+        )
+
+    retenues: List[Correction] = []
+    refusees: List[dict] = []
+    for brute in charge.get("corrections") or []:
+        avant = str(brute.get("avant", ""))
+        apres = str(brute.get("apres", ""))
+        position, raison = _situer(texte, avant)
+        if raison is not None:
+            refusees.append({"avant": avant, "apres": apres, "raison": raison})
+            continue
+        if avant == apres:
+            continue
+        bouges = _difference(avant, apres)
+        retenues.append(
+            Correction(
+                avant=avant,
+                apres=apres,
+                position=position,
+                symboles_modifies=bouges,
+                avertissement=(
+                    "⚠️ Cette correction CHANGE des symboles porteurs de sens : "
+                    + ", ".join(bouges)
+                    + ". Vérifiez sur le document d'origine avant d'accepter."
+                    if bouges
+                    else None
+                ),
+            )
+        )
+
+    return Discussion(
+        reponse=str(charge.get("reponse", "")).strip(),
+        corrections=retenues,
+        refusees=refusees,
+    )

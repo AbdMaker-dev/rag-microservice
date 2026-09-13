@@ -338,6 +338,53 @@ class ProposalResponse(Wire):
     warning: Optional[str] = None
 
 
+class ProposalTurn(Wire):
+    """Un tour de la discussion, tel que management le conserve."""
+
+    role: Literal["prof", "ia"]
+    content: str
+
+
+class ProposalChatRequest(Wire):
+    """Le texte ENTIER, pour que « cette partie-là » veuille dire quelque chose.
+
+    Le modèle lit tout et ne rend que des remplacements ciblés : c'est ce qui
+    permet de lui parler sans lui laisser réécrire le document.
+    """
+
+    request_id: str
+    text: str = Field(min_length=1, max_length=120_000)
+    instruction: str = Field(min_length=1, max_length=2_000)
+    history: List[ProposalTurn] = []
+
+
+class ProposedEdit(Wire):
+    before: str
+    after: str
+    # Où `before` commence dans le texte — l'écran n'a pas à le rechercher,
+    # et il ne PEUT pas : le service a déjà vérifié qu'il s'y trouve une
+    # seule fois.
+    position: int
+    changed_symbols: List[str] = []
+    warning: Optional[str] = None
+
+
+class RejectedEdit(Wire):
+    before: str
+    after: str
+    reason: str
+
+
+class ProposalChatResponse(Wire):
+    contract_version: Literal["1.0"] = CONTRACT_VERSION
+    # Ce que l'IA dit au professeur, en français.
+    reply: str
+    edits: List[ProposedEdit] = []
+    # Ce qu'elle a proposé et qu'on a refusé, avec la raison. Montré : un
+    # refus silencieux ferait croire qu'elle n'a rien trouvé.
+    rejected: List[RejectedEdit] = []
+
+
 # --------------------------------------------------------------------- indexer
 
 

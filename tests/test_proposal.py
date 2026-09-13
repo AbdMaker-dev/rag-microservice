@@ -6,7 +6,9 @@ refuse d'observer une première fois sur un vrai cours.
 
 import pytest
 
-from app.core.proposal import INCERTAIN, porteurs, proposer
+import json
+
+from app.core.proposal import INCERTAIN, discuter, porteurs, proposer
 
 
 class _Llm:
@@ -130,3 +132,131 @@ def test_les_exposants_ne_comptent_pas_pour_des_symboles_differents():
 
     assert porteurs("U²")["2"] == 1
     assert porteurs("U2")["2"] == 1
+
+
+# ─────────────────────── le chat de relecture ───────────────────────
+
+
+class _Chat:
+    """Un modèle qui rend le JSON qu'on lui dit de rendre."""
+
+    def __init__(self, charge):
+        self.charge = charge
+        self.vu = []
+
+    async def chat(self, messages, **kw):
+        self.vu.append((messages, kw))
+        return json.dumps(self.charge, ensure_ascii=False)
+
+    async def complete(self, system, user):  # non utilisé ici
+        raise AssertionError("le chat n'appelle pas complete")
+
+
+TEXTE = (
+    "## p. 1\n"
+    "Une similitude directe a pour écriture z' = az + b.\n"
+    "Son angle θ=arg(a) .\n"
+    "Le rapport vaut |a|.\n"
+)
+
+
+@pytest.mark.asyncio
+async def test_une_correction_situee_est_retenue():
+    chat = _Chat({
+        "reponse": "J'ai remis les espaces autour du signe égal.",
+        "corrections": [{"avant": "Son angle θ=arg(a) .", "apres": "Son angle θ = arg(a)."}],
+    })
+    d = await discuter(chat, TEXTE, "corrige l'espacement de l'angle")
+
+    assert len(d.corrections) == 1
+    c = d.corrections[0]
+    assert c.position == TEXTE.index("Son angle")
+    assert c.symboles_modifies == []
+    assert d.refusees == []
+
+
+@pytest.mark.asyncio
+async def test_un_passage_cite_de_memoire_est_refuse():
+    """Le modèle désigne un endroit qui n'existe pas : on ne devine pas."""
+
+    chat = _Chat({
+        "reponse": "Corrigé.",
+        "corrections": [{"avant": "Son angle theta = arg(a).", "apres": "autre chose"}],
+    })
+    d = await discuter(chat, TEXTE, "corrige l'angle")
+
+    assert d.corrections == []
+    assert len(d.refusees) == 1
+    assert "ne se trouve pas" in d.refusees[0]["raison"]
+
+
+@pytest.mark.asyncio
+async def test_un_passage_ambigu_est_refuse():
+    """Deux occurrences : appliquer au hasard serait pire que refuser."""
+
+    texte = "le centre\nle centre\n"
+    chat = _Chat({
+        "reponse": "Corrigé.",
+        "corrections": [{"avant": "le centre", "apres": "le point Ω"}],
+    })
+    d = await discuter(chat, texte, "renomme le centre")
+
+    assert d.corrections == []
+    assert "2 fois" in d.refusees[0]["raison"]
+
+
+@pytest.mark.asyncio
+async def test_un_symbole_change_dans_le_chat_est_signale():
+    chat = _Chat({
+        "reponse": "J'ai corrigé la formule.",
+        "corrections": [{"avant": "z' = az + b", "apres": "z' = az - b"}],
+    })
+    d = await discuter(chat, TEXTE, "corrige la formule")
+
+    c = d.corrections[0]
+    assert "+-" in c.symboles_modifies or "-+" in c.symboles_modifies
+    assert c.avertissement is not None
+
+
+@pytest.mark.asyncio
+async def test_le_texte_entier_est_donne_au_modele():
+    """C'est la raison d'être du chat : comprendre « cette partie »."""
+
+    chat = _Chat({"reponse": "ok", "corrections": []})
+    await discuter(chat, TEXTE, "que dit le paragraphe sur le rapport ?")
+
+    messages, _ = chat.vu[0]
+    assert TEXTE in messages[-1]["content"]
+    assert messages[0]["role"] == "system"
+    # La consigne doit interdire la réécriture : c'est elle qui borne la
+    # sortie, et elle est aussi fragile qu'un commentaire si rien ne la lit.
+    assert "Tu ne le" in messages[0]["content"]
+    assert "réécris jamais" in messages[0]["content"]
+    assert "n'invente aucun contenu" in messages[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_l_historique_est_rejoue_dans_l_ordre():
+    chat = _Chat({"reponse": "ok", "corrections": []})
+    await discuter(
+        chat, TEXTE, "et maintenant le rapport",
+        historique=[
+            {"role": "prof", "content": "corrige l'angle"},
+            {"role": "ia", "content": "c'est fait"},
+        ],
+    )
+
+    messages, _ = chat.vu[0]
+    assert messages[1] == {"role": "user", "content": "corrige l'angle"}
+    assert messages[2] == {"role": "assistant", "content": "c'est fait"}
+
+
+@pytest.mark.asyncio
+async def test_une_reponse_illisible_ne_casse_pas_l_ecran():
+    class _Casse(_Chat):
+        async def chat(self, messages, **kw):
+            return "ceci n'est pas du JSON"
+
+    d = await discuter(_Casse({}), TEXTE, "corrige")
+    assert d.corrections == []
+    assert "reformulez" in d.reponse
