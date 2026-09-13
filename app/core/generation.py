@@ -657,6 +657,7 @@ class CourseGenerator:
         instruction: str,
         scope: Scope,
         course_id: str,
+        title: Optional[str] = None,
         current_plan: Optional[dict] = None,
         request: Optional[str] = None,
         history: Optional[List[dict]] = None,
@@ -672,15 +673,23 @@ class CourseGenerator:
         queries: List[dict] = []
         warnings: List[str] = []
 
+        # On cherche avec le SUJET, jamais avec la consigne. Mesuré le
+        # 13/09/2026 : un cours dont l'instruction disait « n'invente aucune
+        # formule » cherchait le programme officiel avec ces mots-là — et le
+        # plan tenait par chance, parce que les supports du cours tenaient
+        # en cinq passages. Sur un vrai catalogue, il aurait été bâti sur
+        # des extraits pris au hasard.
+        topic = (title or "").strip() or instruction
+
         frame = await self._retriever.search(
-            query=instruction,
+            query=topic,
             scope=scope,
             limit=5,
             max_excerpt_characters=900,
             role="programme-officiel",
         )
         queries.append(
-            {"question": instruction, "nature": "programme-officiel",
+            {"question": topic, "nature": "programme-officiel",
              "demandeParLeModele": False, "resultats": len(frame)}
         )
         if not frame:
@@ -690,7 +699,7 @@ class CourseGenerator:
         # déposé : un plan fidèle au programme mais aveugle aux supports
         # annoncerait des parties que les documents ne portent pas.
         supports = await self._retriever.search(
-            query=instruction,
+            query=topic,
             scope=scope,
             limit=5,
             max_excerpt_characters=600,
@@ -698,7 +707,7 @@ class CourseGenerator:
             role="support-cours",
         )
         queries.append(
-            {"question": instruction, "nature": "support-cours",
+            {"question": topic, "nature": "support-cours",
              "demandeParLeModele": False, "resultats": len(supports)}
         )
 
@@ -756,7 +765,8 @@ class CourseGenerator:
                 {
                     "role": "user",
                     "content": (
-                        f"Demande du professeur : {instruction}\n\n"
+                        (f"Cours : {topic}\n" if topic != instruction else "")
+                        + f"Demande du professeur : {instruction}\n\n"
                         "Extraits du programme officiel :\n\n"
                         + _render_passages(frame, "P", 1)
                         + "\n\nExtraits des documents déposés par le "
@@ -798,7 +808,7 @@ class CourseGenerator:
         if not items:
             raise GenerationFailed("le plan ne contient aucune partie")
         return PlanDraft(
-            title=str(parsed.get("titre") or instruction).strip(),
+            title=str(parsed.get("titre") or topic).strip(),
             description=str(parsed.get("description", "")).strip(),
             items=items[: self._settings.generation_max_sections],
             queries=queries,

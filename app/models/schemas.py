@@ -562,6 +562,12 @@ class PlanRequest(Wire):
     course_id: str = Field(min_length=1, max_length=255)
     scope: Scope
     instruction: str = Field(min_length=3, max_length=4000)
+    # Le SUJET du cours — son titre. C'est avec lui que l'on cherche le
+    # programme officiel et les supports ; l'instruction, elle, est une
+    # consigne au rédacteur (« n'invente aucune formule ») et ne décrit rien
+    # qu'on puisse chercher. Absent = on cherche avec l'instruction, comme
+    # avant le 13/09/2026.
+    title: Optional[str] = Field(default=None, min_length=1, max_length=500)
     strictness: Literal["grounded", "enriched"] = "grounded"
     current_plan: Optional[Dict[str, Any]] = None
     request: Optional[str] = Field(default=None, max_length=4000)

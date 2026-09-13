@@ -251,6 +251,7 @@ async def plan(
     job = request.app.state.jobs.submit(
         lambda: generator.draft_plan(
             instruction=body.instruction,
+            title=body.title,
             scope=body.scope,
             course_id=body.course_id,
             current_plan=body.current_plan,

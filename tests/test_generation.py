@@ -286,6 +286,39 @@ def test_le_plan_se_propose_avec_resumes_sans_rediger_une_ligne():
     assert retriever.calls[1]["course_id"] == "c"
 
 
+def test_le_plan_cherche_avec_le_sujet_pas_avec_la_consigne():
+    # Mesuré le 13/09/2026 : la consigne « n'invente aucune formule » servait
+    # de question de recherche au programme officiel et aux supports.
+    plan = json.dumps({"titre": "T", "parties": [
+        {"titre": "Définition", "description": "", "sousParties": []}]})
+    retriever = FakeRetriever()
+    llm = ScriptedLlm([plan])
+
+    asyncio.run(_generator(llm, retriever).draft_plan(
+        instruction="Reste fidèle au document : n'invente aucune formule.",
+        title="Nombres complexes et transformations du plan",
+        scope=SCOPE, course_id="c"))
+
+    assert [c["query"] for c in retriever.calls] == [
+        "Nombres complexes et transformations du plan",
+        "Nombres complexes et transformations du plan"]
+    # Le modèle voit les deux : le sujet, et la consigne qui reste une consigne.
+    user = llm.exchanges[0][-1]["content"]
+    assert user.startswith("Cours : Nombres complexes et transformations du plan\n")
+    assert "Demande du professeur : Reste fidèle au document" in user
+
+
+def test_sans_titre_le_plan_cherche_avec_l_instruction_comme_avant():
+    plan = json.dumps({"titre": "T", "parties": [
+        {"titre": "Définition", "description": "", "sousParties": []}]})
+    retriever = FakeRetriever()
+
+    asyncio.run(_generator(ScriptedLlm([plan]), retriever).draft_plan(
+        instruction="cours produit scalaire", scope=SCOPE, course_id="c"))
+
+    assert retriever.calls[0]["query"] == "cours produit scalaire"
+
+
 def test_le_plan_se_revise_en_conversation():
     revise = json.dumps({"titre": "T", "parties": [
         {"titre": "Définition", "description": "", "sousParties": []},
