@@ -307,6 +307,37 @@ class ExtractResponse(Wire):
     warnings: List[str] = []
 
 
+# ------------------------------------------------- proposer, sans appliquer
+
+
+class ProposalRequest(Wire):
+    """Un seul passage à la fois — jamais le document entier."""
+
+    request_id: str
+    passage: str = Field(min_length=1, max_length=4000)
+    # Ce que l'extraction a signalé sur ce passage (`THIN`, `FORMULA`…).
+    # Transmis au modèle comme indice, jamais comme instruction.
+    issues: List[str] = []
+
+
+class ProposalResponse(Wire):
+    """La proposition ET l'original. Le service ne remplace jamais.
+
+    `changedSymbols` est le champ qui compte : une réparation de
+    transcription ne touche ni un chiffre ni un opérateur. S'il n'est pas
+    vide, la proposition change le SENS, et l'écran doit le dire avant que
+    le professeur accepte.
+    """
+
+    contract_version: Literal["1.0"] = CONTRACT_VERSION
+    passage: str
+    proposal: Optional[str] = None
+    changed: bool = False
+    uncertain: bool = False
+    changed_symbols: List[str] = []
+    warning: Optional[str] = None
+
+
 # --------------------------------------------------------------------- indexer
 
 

@@ -26,6 +26,7 @@ from app.api import (
     routes_extract,
     routes_health,
     routes_index,
+    routes_proposal,
     routes_search,
     routes_speech,
 )
@@ -122,6 +123,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_health.router)
     app.include_router(routes_extract.router)
     app.include_router(routes_index.router)
+    app.include_router(routes_proposal.router)
     app.include_router(routes_documents.router)
     app.include_router(routes_search.router)
     app.include_router(routes_generate.router)
