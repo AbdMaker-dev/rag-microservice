@@ -23,13 +23,15 @@ import unicodedata
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Tuple
 
-from app.core.quality import assess
+from app.core.quality import LETTER, assess
 
 logger = logging.getLogger(__name__)
 
 _CID = re.compile(r"\(cid:(\d+)\)")
-_TOKEN = re.compile(r"[^\W\d_]", re.UNICODE)
-_WORDS = re.compile(r"[^\W\d_]+", re.UNICODE)
+# La même définition d'une lettre que la mesure de qualité : les deux ne
+# peuvent pas diverger, sinon un mot jugé sain ici est « réparé » là-bas.
+_TOKEN = re.compile(LETTER, re.UNICODE)
+_WORDS = re.compile(LETTER + "+", re.UNICODE)
 
 # Un candidat décrit une méprise : les octets étaient dans `reelle`, ils ont
 # été lus comme `supposee`. Corriger, c'est refaire le chemin inverse.
@@ -70,6 +72,10 @@ _SYMBOL: Dict[int, str] = {
 # En deçà, on considère qu'aucun candidat n'a rendu la police lisible et on
 # préfère livrer le texte tel quel plutôt qu'un texte faux.
 _ACCEPTANCE_FLOOR = 0.80
+# Gain minimal d'un candidat sur la lecture telle quelle pour être retenu.
+# Une police cassée passe de 0,3 à 0,9 : le seuil ne la gêne pas. Une police
+# saine ne bouge pas de plus de quelques millièmes : il l'immunise.
+_CHOICE_MARGIN = 0.05
 
 # Sous ce nombre de mots, un taux de plausibilité ne veut rien dire : on
 # laisse la police tranquille au lieu de la « corriger » sur un coup de dé.
@@ -244,7 +250,8 @@ def _choose(words: List[str]) -> FontRepair:
     """Trouver la méprise qui rend cette police la plus lisible."""
 
     best = FontRepair(label="aucune")
-    best_score = _fitness(words, words)
+    identity = _fitness(words, words)
+    best_score = identity
 
     for label, supposee, reelle in _CANDIDATES[1:]:
         table = _translation(supposee, reelle)
@@ -252,7 +259,11 @@ def _choose(words: List[str]) -> FontRepair:
             continue
         translated = [word.translate(table) for word in words]
         score = _fitness(words, translated)
-        if score > best_score:
+        # Une table ne remplace la lecture telle quelle que si elle la bat
+        # NETTEMENT. Une police saine se lit déjà à 0,98 ; un candidat qui
+        # monte à 0,985 en retouchant trois mots sur huit cents ne corrige
+        # rien, il gagne au bruit — et ces trois mots étaient « x² ».
+        if score > best_score and score >= identity + _CHOICE_MARGIN:
             best, best_score = (
                 FontRepair(label=label, table=table, source_encoding=reelle),
                 score,

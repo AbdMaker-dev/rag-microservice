@@ -33,6 +33,25 @@ def test_laisse_intacte_une_police_deja_correcte():
     assert plan.is_empty
 
 
+def test_un_exposant_dans_une_police_saine_reste_un_exposant():
+    # Mesuré le 13/09/2026 sur un cours de terminale imprimé par Chrome : la
+    # police de texte était saine, et la réparation la « corrigeait » quand
+    # même — trois mots sur huit cents, tous « x² » devenus « x≤ » (0xB2 vaut
+    # « ≤ » en mac_roman). Le candidat gagnait d'un cheveu parce que « ² »
+    # manquait au répertoire de la mesure de qualité. Une table ne remplace
+    # la lecture telle quelle que si elle la bat nettement.
+    sains = ["compétences", "démontrer", "propriétés", "géométrique", "établir",
+             "orthogonalité", "parallélisme", "métriques", "bilinéaires",
+             "définition", "élève", "réel", "numéro", "année", "donnée",
+             "arrêté", "carré", "degré", "entière", "unité", "qualité",
+             "distance", "module", "√(x²", "+", "y²).", "x²", "u₀", "z′"]
+
+    plan = build_plan(_mots(sains))
+
+    assert plan.is_empty
+    assert plan.unreadable_fonts == []
+
+
 def test_la_police_symbol_devient_des_mathematiques_pas_des_devises():
     """« £ » en police Symbol est un « ≤ », pas une livre sterling.
 

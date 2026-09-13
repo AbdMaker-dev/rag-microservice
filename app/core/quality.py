@@ -17,7 +17,13 @@ from typing import List
 # glyphe c'est ». Universel, pas une variante d'encodage.
 _CID_MARKER = re.compile(r"\(cid:\d+\)")
 
-_TOKEN = re.compile(r"[^\W\d_]+", re.UNICODE)
+# Ce qui fait une lettre. `\w` inclut tout ce que Python juge alphanumérique,
+# et « ² » ou « ₀ » en font partie : « x² » devenait UN mot portant une lettre
+# hors alphabet — donc illisible, donc « réparé » en « x≤ » (mesuré le
+# 13/09/2026). Les exposants et indices sont des chiffres, pas des lettres.
+_SCRIPTS = "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻ⁿ₀₁₂₃₄₅₆₇₈₉₊₋"
+LETTER = rf"[^\W\d_{_SCRIPTS}]"
+_TOKEN = re.compile(LETTER + "+", re.UNICODE)
 
 # Alphabet réellement utilisé en français. C'est une liste blanche de la
 # langue, pas une liste noire des corruptions : elle ne vieillit pas.
@@ -28,6 +34,12 @@ _ALLOWED_PUNCTUATION = set(
     " \t\n\r.,;:!?…'\"«»‘’“”()[]{}<>/\\|-–—+±×÷=≠≤≥%‰°#&*@$€£§©®™_^~`•·◦"
 )
 _ALLOWED_MATH = set("πΠΣσΔδθλμαβγΩω∈∉⊂⊄∩∪∅∀∃∞√∫≈≡→←↔⇒⇔⊥∥∠")
+# Exposants, indices, primes et lettres d'ensembles : « x² », « u₀ », « z′ »,
+# « ℝ » sont le quotidien d'un cours de lycée. Absents du répertoire, ils
+# comptaient comme des corruptions — et la réparation d'encodage, qui note
+# ses candidats avec cette même mesure, préférait « x≤ » à « x² » (mesuré le
+# 13/09/2026 sur un cours de terminale imprimé par Chrome).
+_ALLOWED_MATH |= set("⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻ⁿ₀₁₂₃₄₅₆₇₈₉₊₋′″ℓℝℕℤℚℂ↦∘⋅∑∏∂∇≃≅∝⟨⟩")
 
 _FRENCH_ALPHABET = set("abcdefghijklmnopqrstuvwxyzàâäçéèêëîïñôöùûüÿœæ")
 _VOWELS = set("aeiouyàâäéèêëîïôöùûÿœæ")
