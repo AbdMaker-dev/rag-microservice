@@ -2180,8 +2180,20 @@ class CourseGenerator:
             "examen-blanc": "un EXAMEN BLANC",
         }.get(kind, "un DEVOIR")
 
+        # Chaque cours a droit à la même part de la fenêtre. Le contrat
+        # demande d'envoyer les RÉSUMÉS, qui tiennent ; mais un appelant qui
+        # envoie les cours entiers ne doit pas voir la composition échouer —
+        # c'est ce qui est arrivé au tout premier devoir composé sur le
+        # serveur (14/09/2026 : un cours validé de 28 000 caractères, refusé
+        # à la porte). On borne, on prévient, on compose.
+        part = max(
+            800,
+            _blocks_budget_characters(self._settings.generation_context_tokens)
+            // max(1, len(sources)),
+        )
+        tronques = [s for s in sources if len(s["text"]) > part]
         corpus = "\n\n".join(
-            f"### COURS {index} — {source['heading']}\n{source['text']}"
+            f"### COURS {index} — {source['heading']}\n{source['text'][:part]}"
             for index, source in enumerate(sources, start=1)
         )
         headings = [source["heading"] for source in sources]
@@ -2230,6 +2242,14 @@ class CourseGenerator:
             )
 
         warnings: List[str] = []
+        if tronques:
+            # Le professeur doit savoir que l'épreuve n'a pas vu tout le
+            # cours : une question peut porter sur ce qui a été coupé.
+            warnings.append("SOURCES_TRUNCATED")
+            logger.info(
+                "sources tronquées pour la composition",
+                extra={"cours": len(tronques), "part": part},
+            )
         exercises: List[dict] = []
         dropped = 0
         for entry in parsed.get("exercices") or []:

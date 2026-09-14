@@ -156,3 +156,50 @@ def test_la_route_assessment_rend_un_ticket_puis_l_epreuve():
     assert body["kind"] == "devoir"
     assert body["assessment"]["durationMinutes"] == 55
     assert body["assessment"]["exercises"][0]["points"] == 20
+
+
+def test_des_cours_entiers_ne_font_plus_echouer_la_composition():
+    """Le premier devoir jamais composé sur le serveur a été refusé à la
+    porte : un cours validé de 28 000 caractères, pour une limite de 20 000.
+
+    Le contrat demande les RÉSUMÉS, qui tiennent — mais un appelant qui
+    envoie les cours entiers ne doit pas voir la composition échouer. Chaque
+    cours reçoit la même part de la fenêtre, et on le dit.
+    """
+
+    reponse = json.dumps({"titre": "Devoir", "consignes": "Traitez tout.",
+                          "exercices": [{"enonce": "E1", "corrige": "C1", "points": 20,
+                                         "couvre": ["Suites"]}]})
+    llm = ScriptedLlm([reponse])
+    generateur = CourseGenerator(llm=llm, retriever=FakeRetriever(),
+                                 settings=get_settings())
+    long = "Une phrase de cours qui ne dit pas grand-chose. " * 700  # ~33 000 car
+
+    epreuve = asyncio.run(generateur.compose_assessment(
+        kind="devoir", scope=SCOPE, total_points=20, exercise_count=1,
+        sources=[{"heading": "Suites", "text": long},
+                 {"heading": "Complexes", "text": long}]))
+
+    assert epreuve.exercises[0]["points"] == 20
+    assert "SOURCES_TRUNCATED" in epreuve.warnings
+    # L'appel tient dans la fenêtre : c'est tout l'objet de la coupe.
+    envoye = sum(len(m["content"]) for m in llm.exchanges[0]) // 3
+    assert envoye <= get_settings().generation_context_tokens
+    # Les deux cours sont présents, aucun n'est sacrifié pour l'autre.
+    corpus = llm.exchanges[0][-1]["content"]
+    assert "COURS 1 — Suites" in corpus and "COURS 2 — Complexes" in corpus
+
+
+def test_des_resumes_courts_ne_sont_pas_tronques():
+    reponse = json.dumps({"titre": "Devoir", "consignes": "",
+                          "exercices": [{"enonce": "E1", "corrige": "C1", "points": 20,
+                                         "couvre": ["Suites"]}]})
+    llm = ScriptedLlm([reponse])
+    generateur = CourseGenerator(llm=llm, retriever=FakeRetriever(),
+                                 settings=get_settings())
+
+    epreuve = asyncio.run(generateur.compose_assessment(
+        kind="devoir", scope=SCOPE, total_points=20, exercise_count=1,
+        sources=[{"heading": "Suites", "text": "Le résumé validé du cours. " * 10}]))
+
+    assert epreuve.warnings == []

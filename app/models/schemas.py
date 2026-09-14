@@ -682,7 +682,13 @@ class AssessmentSource(Wire):
     """
 
     heading: str = Field(min_length=1, max_length=500)
-    text: str = Field(min_length=20, max_length=20_000)
+    # Le plafond est large exprès : un service qui refuse une entrée un peu
+    # trop longue oblige son appelant à couper au hasard, et le premier
+    # devoir jamais composé sur le serveur a échoué là-dessus (14/09/2026,
+    # un cours validé de 28 000 caractères). Ce qui ne tient pas dans la
+    # fenêtre du modèle est borné à la composition, équitablement entre les
+    # cours — voir `compose_assessment`.
+    text: str = Field(min_length=20, max_length=60_000)
 
 
 class AssessmentRequest(Wire):
