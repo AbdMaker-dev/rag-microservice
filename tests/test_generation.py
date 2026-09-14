@@ -651,13 +651,15 @@ def test_un_caractere_de_controle_rend_sa_commande_latex():
     # 8 champs sur 10 abîmés, aucune erreur levée.
     from app.core.generation import _parse_json_block
 
-    brut = ('{"exercices": [{"enonce": "u = \x0crac{3}{4} u_n",'
+    # Les formules sont délimitées, comme dans les exercices réels : c'est
+    # ce contexte qui autorise à rendre une tabulation à « \\t ».
+    brut = ('{"exercices": [{"enonce": "$u = \x0crac{3}{4} u_n$",'
             ' "corrige": "\x08egin{align*} 2 \x09imes 3 \\\\end{align*}",'
             ' "difficulte": "moyen"}]}')
 
     exercice = _parse_json_block(brut)["exercices"][0]
 
-    assert exercice["enonce"] == "u = \\frac{3}{4} u_n"
+    assert exercice["enonce"] == "$u = \\frac{3}{4} u_n$"
     assert exercice["corrige"] == "\\begin{align*} 2 \\times 3 \\end{align*}"
 
 
@@ -669,25 +671,29 @@ def test_la_tabulation_est_reparee_comme_les_autres():
     from app.core.generation import _parse_json_block
 
     parsed = _parse_json_block(
-        '{"a": "\\\\frac{\theta}{2}", "b": "4 \times 1", "c": "\text{si}"}'
+        '{"a": "$\\\\frac{\theta}{2}$", "b": "$4 \times 1$", "c": "$\text{si}$"}'
     )
 
-    assert parsed["a"] == "\\frac{\\theta}{2}"
-    assert parsed["b"] == "4 \\times 1"
-    assert parsed["c"] == "\\text{si}"
+    assert parsed["a"] == "$\\frac{\\theta}{2}$"
+    assert parsed["b"] == "$4 \\times 1$"
+    assert parsed["c"] == "$\\text{si}$"
 
 
-def test_une_tabulation_d_indentation_n_est_pas_signalee():
-    # Le relevé de ce qui reste abîmé exige une LETTRE après le contrôle :
-    # une vraie tabulation d'indentation est suivie d'une espace ou d'un
-    # retour à la ligne. Sans cette condition il fallait exclure la
-    # tabulation, et c'est ce trou qui a masqué le défaut.
+def test_une_tabulation_hors_formule_reste_une_tabulation():
+    # C'est l'ENDROIT qui départage, pas une liste de commandes : « \tilde »
+    # n'était dans aucune liste et douze occurrences sont restées abîmées
+    # dans des exercices régénérés le 14/09/2026. Un tableau tabulé n'a
+    # jamais sa place dans une formule ; une tabulation qui y est vient donc
+    # forcément de « \t ».
     from app.core.generation import _reparer_controles
 
-    texte, restants = _reparer_controles("ligne\n\t  suite indentée")
+    dedans, restants_dedans = _reparer_controles("$\tilde{L} = 4$")
+    dehors, restants_dehors = _reparer_controles("Nom\tPrénom\tClasse")
+    indentation, restants_indent = _reparer_controles("ligne\n\t  suite indentée")
 
-    assert texte == "ligne\n\t  suite indentée"
-    assert restants == 0
+    assert dedans == "$\\tilde{L} = 4$" and restants_dedans == 0
+    assert dehors == "Nom\tPrénom\tClasse" and restants_dehors == 0
+    assert indentation == "ligne\n\t  suite indentée" and restants_indent == 0
 
 
 def test_une_commande_absente_de_toute_liste_est_rendue_quand_meme():
@@ -751,11 +757,17 @@ def test_la_relance_change_la_demande_au_lieu_de_la_repeter():
 
     assert draft.summary == "Enfin."
     relance = llm.exchanges[1][-1]["content"]
-    assert "pas de LaTeX" in relance and "plus court" in relance
+    assert "plus court" in relance and "aucune répétition" in relance
     assert relance != llm.exchanges[0][-1]["content"]
 
 
-def test_les_trois_blocs_interdisent_le_latex():
+def test_les_trois_blocs_ecrivent_leurs_formules_comme_le_cours():
+    # « Nous sommes dans un e-learning, tous les cours de toutes les matières
+    # doivent être affichés clairement » (Alioune, 14/09/2026). Les sections
+    # portent des centaines de formules et l'écran les rend : des exercices
+    # en texte plat sous un cours en belles formules, ce serait deux qualités
+    # dans le même écran. Ce qu'on interdit, c'est la décoration — c'est elle
+    # qui avait fait boucler le modèle sur « \\boldsymbol ».
     for kind, reply in [
         ("resume", json.dumps({"resume": "R."})),
         ("quiz", json.dumps({"questions": [
@@ -767,7 +779,9 @@ def test_les_trois_blocs_interdisent_le_latex():
         llm = ScriptedLlm([reply])
         asyncio.run(_generator(llm).generate_blocks(
             kind=kind, text="Cours court.", scope=SCOPE))
-        assert "ni LaTeX ni commande à contre-oblique" in llm.exchanges[0][0]["content"], kind
+        consigne = llm.exchanges[0][0]["content"]
+        assert "entre \\( et \\)" in consigne, kind
+        assert "boldsymbol" in consigne, kind
 
 
 def test_un_texte_sain_n_est_jamais_coupe():

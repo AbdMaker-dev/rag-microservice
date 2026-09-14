@@ -206,15 +206,23 @@ _TONE = (
 )
 
 
-# Les cours de la plateforme écrivent leurs formules en clair — x², u₀, √,
-# ℓ — parce que c'est ce que le professeur a relu et ce que l'élève lit à
-# l'écran. Laisser le modèle passer en LaTeX ouvre une porte qu'on a vue se
-# refermer sur lui : le 14/09/2026, un résumé a glissé de « $(u_n)$ » à
-# « \boldsymbol{ » répété 3 000 caractères durant, jusqu'à épuiser son
-# budget de sortie. Une contre-oblique appelle la suivante.
-_SANS_LATEX = (
-    " N'emploie ni LaTeX ni commande à contre-oblique : écris les formules "
-    "comme le cours les écrit."
+# Les formules s'écrivent comme dans les sections du cours, et pour la même
+# raison : « nous sommes dans un e-learning, tous les cours de toutes les
+# matières doivent être affichés clairement » (Alioune, 14/09/2026). Les
+# sections en portent des centaines — 427 dans un seul cours de terminale —
+# et l'écran du professeur comme celui de l'élève les rendent. Les avoir
+# interdites dans les exercices le matin même donnait un cours aux belles
+# formules suivi d'exercices en texte plat : deux qualités dans un même
+# écran. Pour le français ou l'histoire, cette consigne ne coûte rien —
+# il n'y a pas de formule à écrire.
+#
+# Reste la leçon du jour : « \boldsymbol » répété trois mille fois. Ce n'est
+# pas le LaTeX qui a fait ça, c'est la DÉCORATION — on l'interdit, elle,
+# nommément, et la queue répétitive est coupée de toute façon.
+_FORMULES = (
+    " Écris les formules comme le cours : en ligne entre \\( et \\), "
+    "en bloc entre \\[ et \\]. Aucune décoration — ni \\boldsymbol, ni "
+    "\\mathbf, ni couleur : seulement ce qui porte du sens mathématique."
 )
 
 
@@ -275,15 +283,13 @@ _CONTROLE_VERS_LETTRE = {"\b": "b", "\f": "f", "\t": "t", "\r": "r"}
 # une ligne qui commence par « ne » est du français, pas « \ne ». On le
 # signale, on ne le devine pas.
 _CONTROLES_A_REPARER = "".join(_CONTROLE_VERS_LETTRE)
-# Ce qui reste abîmé après réparation : un caractère de contrôle SUIVI D'UNE
-# LETTRE. La condition compte — une tabulation d'indentation est suivie d'une
-# espace ou d'un retour à la ligne, jamais d'une lettre. Sans elle, il
-# fallait exclure la tabulation du relevé pour éviter les faux positifs, et
-# c'est précisément ce qui a laissé passer « \t » + « heta » le 14/09/2026 :
-# un premier relevé a conclu « 0 abîmé » sur des cours qui en portaient 46.
-# La tabulation est le cas sournois de cette famille : elle ressemble à de
-# l'espacement légitime là où un saut de page saute aux yeux.
-_CONTROLES_RESTANTS = re.compile(r"[\x00-\x09\x0b-\x1f](?=[A-Za-z])")
+
+
+def _est_un_controle(char: str) -> bool:
+    """Un caractère de contrôle, hors retour à la ligne — celui-ci est du
+    texte, pas un dégât."""
+
+    return char < " " and char != "\n"
 
 
 def _reparer_controles(texte: str) -> Tuple[str, int]:
@@ -302,35 +308,52 @@ def _reparer_controles(texte: str) -> Tuple[str, int]:
     trois caractères n'ont aucun usage légitime dans un texte de cours.
 
     La TABULATION est le cas à part : elle sépare légitimement les colonnes
-    d'un tableau écrit à la main. Elle n'est rendue que si le mot qu'elle
-    forme est une commande connue — « \\text », « \\times », « \\theta ». Là,
-    une liste est le bon outil : elle ne décide que d'un cas ambigu.
+    d'un tableau écrit à la main. Ce qui la départage n'est pas une liste de
+    commandes — la première version en avait une, et « \\tilde » n'y était
+    pas, douze fois dans des exercices régénérés — mais l'ENDROIT : une
+    tabulation à l'intérieur d'une formule vient forcément de « \\t », et un
+    tableau n'a jamais sa place dans une formule. Hors formule, on laisse.
     """
 
-    if not any(c in texte for c in _CONTROLES_A_REPARER):
-        return texte, len(_CONTROLES_RESTANTS.findall(texte))
+    # Passe 1 — les contrôles sans ambiguïté. Un retour arrière, un saut de
+    # page, un retour chariot n'ont aucun usage dans un texte de cours : on
+    # rend le backslash et la lettre, où qu'ils soient.
+    restants = 0
     out: List[str] = []
-    index = 0
-    while index < len(texte):
-        char = texte[index]
+    for index, char in enumerate(texte):
+        suivi_d_une_lettre = texte[index + 1 : index + 2].isalpha()
         lettre = _CONTROLE_VERS_LETTRE.get(char)
-        suite = texte[index + 1 :]
-        if lettre is None or not suite[:1].isalpha():
+        if lettre is None or char == "\t" or not suivi_d_une_lettre:
+            if _est_un_controle(char) and suivi_d_une_lettre and char != "\t":
+                restants += 1
             out.append(char)
-            index += 1
-            continue
-        if char == "\t" and not any(
-            suite.startswith(nom[1:]) and not suite[len(nom) - 1 : len(nom)].isalpha()
-            for nom in _LATEX_TRIEES
-            if nom[0] == "t"
-        ):
-            out.append(char)
-            index += 1
             continue
         out.append("\\" + lettre)
+    texte = "".join(out)
+
+    # Passe 2 — la tabulation, sur le texte déjà réparé : c'est nécessaire
+    # pour reconnaître les délimiteurs que la passe 1 vient de rétablir,
+    # « \begin{align*} » en tête. Elle n'est rendue que DANS une formule ;
+    # ailleurs elle sépare les colonnes d'un tableau.
+    if "\t" not in texte:
+        return texte, restants
+    out = []
+    index = 0
+    dans_formule = False
+    while index < len(texte):
+        char = texte[index]
+        if texte.startswith("\\begin{", index) or texte[index : index + 2] in ("\\(", "\\["):
+            dans_formule = True
+        elif texte.startswith("\\end{", index) or texte[index : index + 2] in ("\\)", "\\]"):
+            dans_formule = False
+        elif char == "$":
+            dans_formule = not dans_formule
+        if char == "\t" and dans_formule and texte[index + 1 : index + 2].isalpha():
+            out.append("\\t")
+        else:
+            out.append(char)
         index += 1
-    repare = "".join(out)
-    return repare, len(_CONTROLES_RESTANTS.findall(repare))
+    return "".join(out), restants
 
 
 def _reparer_en_profondeur(valeur, compteur: List[int]):
@@ -1432,7 +1455,7 @@ class CourseGenerator:
                 "Rédige le RÉSUMÉ de ce cours : 10 à 15 lignes, les idées "
                 "essentielles, les définitions et formules clés, dans l'ordre "
                 "du cours, style impersonnel. Rien qui ne soit dans le cours. "
-                + _SANS_LATEX
+                + _FORMULES
                 + ' Réponds UNIQUEMENT en JSON : {"resume": "..."}'
             )
         elif kind == "quiz":
@@ -1441,7 +1464,7 @@ class CourseGenerator:
                 "cours. Chaque question : exactement 4 propositions, UNE seule "
                 "juste, et la réponse doit se trouver dans le cours. Difficulté "
                 "progressive. Une explication courte par question (pourquoi "
-                "c'est la bonne réponse, en renvoyant au cours)." + _SANS_LATEX + " Réponds "
+                "c'est la bonne réponse, en renvoyant au cours)." + _FORMULES + " Réponds "
                 'UNIQUEMENT en JSON : {"questions": [{"question": "...", '
                 '"choix": ["...", "...", "...", "..."], "reponse": 0, '
                 '"explication": "..."}]} — reponse est l\'index (0 à 3) de la '
@@ -1452,7 +1475,7 @@ class CourseGenerator:
                 f"Rédige {count} EXERCICES d'entraînement sur ce cours, de "
                 "difficulté progressive (facile → difficile), chacun avec son "
                 "CORRIGÉ pas à pas. Les exercices ne mobilisent que ce que le "
-                "cours enseigne." + _SANS_LATEX + " Réponds UNIQUEMENT en JSON : "
+                "cours enseigne." + _FORMULES + " Réponds UNIQUEMENT en JSON : "
                 '{"exercices": [{"enonce": "...", "corrige": "...", '
                 '"difficulte": "facile|moyen|difficile"}]}'
             )
@@ -1509,11 +1532,10 @@ class CourseGenerator:
                 {
                     "role": "user",
                     "content": (
-                        "Ta réponse n'était pas exploitable. Recommence, plus "
-                        "court, en texte simple : pas de LaTeX, pas de "
-                        "commande à contre-oblique, les formules écrites "
-                        "comme dans le cours. Réponds uniquement avec le "
-                        "JSON demandé."
+                        "Ta réponse n'était pas exploitable. Recommence, "
+                        "plus court et plus simple : des formules brèves, "
+                        "aucune décoration, aucune répétition. Réponds "
+                        "uniquement avec le JSON demandé."
                     ),
                 }
             )
