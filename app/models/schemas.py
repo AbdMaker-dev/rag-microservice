@@ -620,6 +620,39 @@ class BlocksRequest(Wire):
     instruction: str = Field(default="", max_length=2000)
 
 
+class BlocksDiscussRequest(BlocksRequest):
+    """Réviser un bloc sur consigne du professeur — le « chat » des blocs.
+
+    Le document, le plan et les sections ont chacun le leur depuis le début ;
+    les trois blocs n'en avaient pas, et un quiz dont une réponse est fausse
+    arrivait donc intact jusqu'à l'élève. Demandé par Alioune le 14/09/2026 :
+    « on fait la même chose que les autres ».
+
+    Comme partout ailleurs, le brouillon vit côté plateforme et ce service
+    reste sans état : il reçoit le bloc actuel, la consigne, l'historique,
+    et rend le bloc révisé.
+    """
+
+    # Le bloc tel qu'il est aujourd'hui. Un résumé porte son texte ; un quiz
+    # ou des exercices portent leurs items, dans l'ordre où le prof les voit.
+    current_summary: str = Field(default="", max_length=20_000)
+    current_items: List[Dict[str, Any]] = Field(default_factory=list, max_length=30)
+    # L'item visé, par sa place dans la liste. C'est le cas courant, et c'est
+    # une exigence d'Alioune (14/09/2026) : « c'est exo par exo, question par
+    # question ». Le même principe que la relecture d'un document — l'IA
+    # propose, le professeur accepte, passage par passage. Un seul item
+    # révisé, c'est aussi trente secondes d'attente au lieu de cinq minutes,
+    # et les autres qui ne bougent pas d'un caractère.
+    # Omis : la consigne porte sur le bloc entier (« ajoute un exercice
+    # difficile », « ils sont tous trop faciles »).
+    target_index: Optional[int] = Field(default=None, ge=0, le=29)
+    # Ce que le professeur demande : « la question 1 est fausse, le module
+    # vaut racine de 2 », « remplace l'exercice 3 par un plus facile ».
+    request: str = Field(min_length=3, max_length=4000)
+    # Les derniers tours, tirés de la table de discussion de la plateforme.
+    history: List[Dict[str, str]] = Field(default_factory=list, max_length=20)
+
+
 class QuizQuestion(Wire):
     question: str
     # Toujours quatre propositions, une seule juste.

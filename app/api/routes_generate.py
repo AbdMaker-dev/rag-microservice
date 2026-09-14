@@ -30,6 +30,7 @@ from app.models.schemas import (
     AssessmentDraft,
     AssessmentExercise,
     AssessmentRequest,
+    BlocksDiscussRequest,
     BlocksRequest,
     Exercise,
     QuizQuestion,
@@ -341,6 +342,56 @@ async def blocks(
     logger.info(
         "bloc lancé",
         extra={"requestId": body.request_id, "job": job.id, "kind": body.kind},
+    )
+    return GenerateAccepted(request_id=body.request_id, job_id=job.id)
+
+
+@router.post(
+    "/generate/blocks/discuss",
+    response_model=GenerateAccepted,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def blocks_discuss(
+    body: BlocksDiscussRequest,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+) -> GenerateAccepted:
+    """Réviser un bloc sur consigne du professeur — le « chat » des blocs.
+
+    Le document, le plan et les sections ont le leur depuis le début ; les
+    trois blocs n'en avaient pas, et un quiz dont une réponse est fausse
+    arrivait intact jusqu'à l'élève. Avec `targetIndex`, la révision porte
+    sur UNE question ou UN exercice : les autres sont rendus mot pour mot.
+    """
+
+    generator = CourseGenerator(
+        llm=request.app.state.llm,
+        retriever=request.app.state.retriever,
+        settings=settings,
+    )
+    job = request.app.state.jobs.submit(
+        lambda: generator.discuss_block(
+            kind=body.kind,
+            text=body.text,
+            scope=body.scope,
+            request=body.request,
+            current_summary=body.current_summary,
+            current_items=body.current_items,
+            target_index=body.target_index,
+            count=body.count,
+            instruction=body.instruction,
+            history=body.history,
+        ),
+        lane="prof",
+    )
+    logger.info(
+        "révision de bloc lancée",
+        extra={
+            "requestId": body.request_id,
+            "job": job.id,
+            "kind": body.kind,
+            "item": body.target_index,
+        },
     )
     return GenerateAccepted(request_id=body.request_id, job_id=job.id)
 

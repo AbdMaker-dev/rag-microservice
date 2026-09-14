@@ -682,6 +682,74 @@ def _vient_de_l_exemple(item: dict) -> bool:
     return enonce in (_EXEMPLE_QUESTION, _EXEMPLE_ENONCE)
 
 
+def format_du_bloc(kind: str) -> str:
+    """Comment un bloc s'écrit — la même description pour la rédaction et
+    pour la révision.
+
+    L'écrire deux fois, c'est promettre qu'elles resteront identiques ; or la
+    révision doit rendre exactement ce que la rédaction produirait, sinon le
+    lecteur balisé ne reconnaît plus rien.
+    """
+
+    if kind == "resume":
+        return (
+            _FORMULES
+            + " Réponds avec le résumé SEUL : pas de titre, pas de JSON, "
+            "pas de commentaire avant ou après."
+        )
+    if kind == "quiz":
+        return (
+            _FORMULES
+            + " Réponds EXACTEMENT dans ce format, sans JSON, en reprenant "
+            "les lignes « ### » telles quelles. L'exemple ci-dessous ne "
+            "montre QUE la mise en forme : son contenu est étranger au cours "
+            "et ne doit jamais apparaître dans ta réponse.\n"
+            "### QUESTION\n" + _EXEMPLE_QUESTION + "\n"
+            "- A) Dakar\n- B) Thiès\n- C) Saint-Louis\n- D) Ziguinchor\n"
+            "### RÉPONSE A\n"
+            "### EXPLICATION\nC'est la capitale du Sénégal."
+        )
+    return (
+        _FORMULES
+        + " Réponds EXACTEMENT dans ce format, sans JSON, en reprenant les "
+        "lignes « ### » telles quelles. L'exemple ci-dessous ne montre QUE "
+        "la mise en forme : son contenu est étranger au cours et ne doit "
+        "jamais apparaître dans ta réponse.\n"
+        "### EXERCICE (facile)\n" + _EXEMPLE_ENONCE + "\n"
+        "### CORRIGÉ\n" + _EXEMPLE_CORRIGE
+    )
+
+
+def _rendre_item(kind: str, item: dict) -> str:
+    """Un item tel que le modèle l'a écrit — le même format balisé.
+
+    Lui montrer sa propre écriture évite de lui apprendre deux dialectes :
+    il relit ce qu'il produirait, et rend une correction au même moule.
+    """
+
+    if kind == "quiz":
+        lignes = [
+            "### QUESTION",
+            str(item.get("question", "")),
+            *(
+                f"- {lettre}) {choix}"
+                for lettre, choix in zip("ABCD", item.get("choices") or [])
+            ),
+            f"### RÉPONSE {'ABCD'[int(item.get('answer', 0)) % 4]}",
+        ]
+        if item.get("explanation"):
+            lignes += ["### EXPLICATION", str(item["explanation"])]
+        return "\n".join(lignes)
+    return "\n".join(
+        [
+            f"### EXERCICE ({item.get('difficulty', 'moyen')})",
+            str(item.get("statement", "")),
+            "### CORRIGÉ",
+            str(item.get("solution", "")),
+        ]
+    )
+
+
 def _chaines(valeur) -> List[str]:
     """Tout le texte d'un objet JSON lu, à plat — énoncés, corrigés,
     questions, explications, quelle que soit sa forme."""
@@ -1604,6 +1672,101 @@ class CourseGenerator:
             has_additions=_ADDITION in text,
         )
 
+    async def discuss_block(
+        self,
+        *,
+        kind: str,
+        text: str,
+        scope: Scope,
+        request: str,
+        current_summary: str = "",
+        current_items: Optional[List[dict]] = None,
+        target_index: Optional[int] = None,
+        count: int = 5,
+        instruction: str = "",
+        history: Optional[List[dict]] = None,
+    ) -> BlocksDraft:
+        """Réviser un bloc sur consigne du professeur — le « chat » des blocs.
+
+        Le document, le plan et les sections ont le leur depuis le début ;
+        les trois blocs n'en avaient pas. Un quiz dont une réponse est fausse
+        arrivait donc intact jusqu'à l'élève, sans que personne ne puisse
+        dire « la question 1 est fausse, corrige-la ».
+
+        La révision porte sur UN item quand `target_index` est donné — exigence
+        d'Alioune : « c'est exo par exo, question par question », le même
+        principe que la relecture d'un document. Les autres items sont rendus
+        mot pour mot : sur CPU, chaque item réécrit coûte des minutes, et un
+        exercice que le professeur a déjà accepté n'a aucune raison de bouger.
+        """
+
+        items = list(current_items or [])
+        if kind == "resume":
+            vise = current_summary
+        elif target_index is not None and 0 <= target_index < len(items):
+            vise = _rendre_item(kind, items[target_index])
+        elif target_index is not None:
+            raise GenerationFailed(
+                f"l'item {target_index + 1} n'existe pas : le bloc en compte "
+                f"{len(items)}"
+            )
+        else:
+            vise = "\n\n".join(_rendre_item(kind, item) for item in items)
+
+        passe = "\n".join(
+            f"- {tour.get('author', '?')} : {tour.get('message', '')}"
+            for tour in (history or [])[-10:]
+        )
+        quoi = {"resume": "ce RÉSUMÉ", "quiz": "ce QUIZ"}.get(kind, "ces EXERCICES")
+        if target_index is not None and kind != "resume":
+            quoi = "cette QUESTION" if kind == "quiz" else "cet EXERCICE"
+
+        demande = (
+            f"Voici {quoi}, tel qu'il est aujourd'hui :\n\n{vise}\n\n"
+            + (f"Consignes précédentes :\n{passe}\n\n" if passe else "")
+            + f"Demande du professeur : {request}\n\n"
+            "Rends la version corrigée, dans le MÊME format et rien d'autre — "
+            "ni commentaire, ni explication de ce que tu as changé."
+        )
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Tu révises le matériel d'entraînement d'un cours, pour "
+                    "des élèves. " + _context_line(scope) + _TONE + " "
+                    + format_du_bloc(kind)
+                    + (f" Consigne du cours : {instruction}" if instruction else "")
+                ),
+            },
+            {"role": "user", "content": f"LE COURS (validé par le professeur) :\n\n{text}"},
+            {"role": "user", "content": demande},
+        ]
+
+        raw = _couper_repetition(
+            await self._chat(messages, num_predict=max(
+                self._settings.generation_output_tokens, 3000))
+        )
+        revises, resume, warnings = self._lire_bloc(kind, sans_double_backslash(raw))
+
+        if kind == "resume":
+            if not resume:
+                raise GenerationFailed("la révision du résumé est vide : relancer")
+            return BlocksDraft(kind=kind, summary=resume, warnings=warnings)
+        if not revises:
+            raise GenerationFailed(
+                f"la révision n'a pas produit de {kind} exploitable : relancer"
+            )
+        if target_index is not None:
+            # Un seul item change ; les autres sont rendus tels quels. C'est
+            # la promesse faite au professeur quand il corrige une question.
+            items[target_index] = revises[0]
+        else:
+            items = revises
+        if kind == "quiz":
+            return BlocksDraft(kind=kind, quiz=items, warnings=warnings)
+        return BlocksDraft(kind=kind, exercises=items, warnings=warnings)
+
     async def generate_blocks(
         self,
         *,
@@ -1694,9 +1857,7 @@ class CourseGenerator:
                 "Rédige le RÉSUMÉ de ce cours : 10 à 15 lignes, les idées "
                 "essentielles, les définitions et formules clés, dans l'ordre "
                 "du cours, style impersonnel. Rien qui ne soit dans le cours. "
-                + _FORMULES
-                + " Réponds avec le résumé SEUL : pas de titre, pas de JSON, "
-                "pas de commentaire avant ou après."
+                + format_du_bloc(kind)
             )
         elif kind == "quiz":
             demand = (
@@ -1704,37 +1865,20 @@ class CourseGenerator:
                 "cours. Chaque question : exactement 4 propositions, UNE seule "
                 "juste, et la réponse doit se trouver dans le cours. Difficulté "
                 "progressive. Une explication courte par question (pourquoi "
-                "c'est la bonne réponse, en renvoyant au cours)." + _FORMULES
-                + " Réponds EXACTEMENT dans ce format, sans JSON, en "
-                "reprenant les lignes « ### » telles quelles. L'exemple "
-                "ci-dessous ne montre QUE la mise en forme : son contenu est "
-                "étranger au cours et ne doit jamais apparaître dans ta "
-                "réponse.\n"
-                "### QUESTION\n" + _EXEMPLE_QUESTION + "\n"
-                "- A) Dakar\n- B) Thiès\n- C) Saint-Louis\n- D) Ziguinchor\n"
-                "### RÉPONSE A\n"
-                "### EXPLICATION\nC'est la capitale du Sénégal.\n"
-                "### QUESTION\n…et ainsi de suite, une question par bloc, "
-                "sur LE COURS ci-dessous et rien d'autre."
+                "c'est la bonne réponse, en renvoyant au cours)."
+                + format_du_bloc(kind)
+                + "\n### QUESTION\n…et ainsi de suite, une question par "
+                "bloc, sur LE COURS ci-dessous et rien d'autre."
             )
         else:
             demand = (
                 f"Rédige {count} EXERCICES d'entraînement sur ce cours, de "
                 "difficulté progressive (facile → difficile), chacun avec son "
                 "CORRIGÉ pas à pas. Les exercices ne mobilisent que ce que le "
-                "cours enseigne." + _FORMULES
-                + " Réponds EXACTEMENT dans ce format, sans JSON, en "
-                "reprenant les lignes « ### » telles quelles. L'exemple "
-                "ci-dessous ne montre QUE la mise en forme : son contenu est "
-                "étranger au cours et ne doit jamais apparaître dans ta "
-                "réponse.\n"
-                "### EXERCICE (facile)\n"
-                "" + _EXEMPLE_ENONCE + "\n"
-                "### CORRIGÉ\n"
-                "" + _EXEMPLE_CORRIGE + "\n"
-                "### EXERCICE (moyen)\n"
-                "…et ainsi de suite, un exercice par bloc, sur LE COURS "
-                "ci-dessous et rien d'autre."
+                "cours enseigne."
+                + format_du_bloc(kind)
+                + "\n### EXERCICE (moyen)\n…et ainsi de suite, un exercice "
+                "par bloc, sur LE COURS ci-dessous et rien d'autre."
             )
 
         messages = [
