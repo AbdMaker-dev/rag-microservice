@@ -166,3 +166,38 @@ def test_la_revision_parle_le_meme_format_que_la_redaction():
     # révision : deux copies finiraient par diverger, et le lecteur balisé
     # ne reconnaîtrait plus ce que la révision rend.
     assert format_du_bloc("exercices") in llm.exchanges[0][0]["content"]
+
+
+def test_un_cours_trop_long_ne_fait_plus_echouer_la_revision():
+    # Mesuré le 14/09/2026 sur le serveur : réviser UNE question d'un cours
+    # de dix sections échouait avant même de commencer — ≈9 100 tokens pour
+    # une fenêtre de 8 192, parce que le cours entier accompagnait la
+    # consigne. Le cours sert de référence ; ce qui ne tient pas est coupé,
+    # et on le dit.
+    llm = ScriptedLlm(["### QUESTION\nQ ?\n- A) a\n- B) b\n- C) c\n- D) d\n### RÉPONSE B"])
+    cours = "Une phrase de cours qui ne dit pas grand-chose. " * 900  # ~43 000 car
+
+    draft = asyncio.run(CourseGenerator(
+        llm=llm, retriever=FakeRetriever(), settings=get_settings()
+    ).discuss_block(
+        kind="quiz", text=cours, scope=SCOPE, current_items=QUIZ, target_index=0,
+        request="La bonne réponse est fausse."))
+
+    assert draft.quiz[0]["question"] == "Q ?"
+    assert "COURSE_TRUNCATED_FOR_REVIEW" in draft.warnings
+    # Et l'appel tient dans la fenêtre — c'est tout l'objet de la coupe.
+    envoye = sum(len(m["content"]) for m in llm.exchanges[0]) // 3
+    assert envoye <= get_settings().generation_context_tokens
+
+
+def test_un_cours_court_n_est_pas_tronque():
+    llm = ScriptedLlm(["### QUESTION\nQ ?\n- A) a\n- B) b\n- C) c\n- D) d\n### RÉPONSE B"])
+
+    draft = asyncio.run(CourseGenerator(
+        llm=llm, retriever=FakeRetriever(), settings=get_settings()
+    ).discuss_block(
+        kind="quiz", text=COURS, scope=SCOPE, current_items=QUIZ, target_index=0,
+        request="Corrige."))
+
+    assert draft.warnings == []
+    assert COURS in llm.exchanges[0][1]["content"]

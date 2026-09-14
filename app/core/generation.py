@@ -1729,17 +1729,34 @@ class CourseGenerator:
             "ni commentaire, ni explication de ce que tu as changé."
         )
 
+        consigne = (
+            "Tu révises le matériel d'entraînement d'un cours, pour "
+            "des élèves. " + _context_line(scope) + _TONE + " "
+            + format_du_bloc(kind)
+            + (f" Consigne du cours : {instruction}" if instruction else "")
+        )
+
+        # Le cours sert de référence, mais il ne tient pas toujours à côté du
+        # bloc et de la consigne : un cours de dix sections fait 28 000
+        # caractères, et la révision d'UNE question échouait alors avant même
+        # de commencer (mesuré le 14/09/2026, ≈9 100 tokens pour 8 192). On
+        # garde ce qui tient, depuis le début — le cours est dans son ordre,
+        # et la consigne du professeur dit déjà ce qu'il faut corriger.
+        place = _blocks_budget_characters(
+            self._settings.generation_context_tokens
+        ) - len(consigne) - len(demande)
+        cours = text[: max(500, place)]
+        warnings: List[str] = []
+        if len(cours) < len(text):
+            warnings.append("COURSE_TRUNCATED_FOR_REVIEW")
+            logger.info(
+                "cours tronqué pour la révision",
+                extra={"kind": kind, "garde": len(cours), "total": len(text)},
+            )
+
         messages = [
-            {
-                "role": "system",
-                "content": (
-                    "Tu révises le matériel d'entraînement d'un cours, pour "
-                    "des élèves. " + _context_line(scope) + _TONE + " "
-                    + format_du_bloc(kind)
-                    + (f" Consigne du cours : {instruction}" if instruction else "")
-                ),
-            },
-            {"role": "user", "content": f"LE COURS (validé par le professeur) :\n\n{text}"},
+            {"role": "system", "content": consigne},
+            {"role": "user", "content": f"LE COURS (validé par le professeur) :\n\n{cours}"},
             {"role": "user", "content": demande},
         ]
 
@@ -1747,7 +1764,8 @@ class CourseGenerator:
             await self._chat(messages, num_predict=max(
                 self._settings.generation_output_tokens, 3000))
         )
-        revises, resume, warnings = self._lire_bloc(kind, sans_double_backslash(raw))
+        revises, resume, signales = self._lire_bloc(kind, sans_double_backslash(raw))
+        warnings += [w for w in signales if w not in warnings]
 
         if kind == "resume":
             if not resume:
