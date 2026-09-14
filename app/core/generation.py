@@ -1760,12 +1760,51 @@ class CourseGenerator:
             {"role": "user", "content": demande},
         ]
 
-        raw = _couper_repetition(
-            await self._chat(messages, num_predict=max(
-                self._settings.generation_output_tokens, 3000))
-        )
-        revises, resume, signales = self._lire_bloc(kind, sans_double_backslash(raw))
-        warnings += [w for w in signales if w not in warnings]
+        # Une révision qui ne change rien a coûté au professeur une minute
+        # d'attente pour rien. Mesuré le 14/09/2026 sur le même quiz, à 45 s
+        # chacun : « corrige les propositions ET la bonne réponse » corrige,
+        # « corrige la bonne réponse » ne touche à rien — le modèle prend la
+        # seconde au pied de la lettre, la réponse marquée étant déjà celle
+        # qu'il croit juste. Le professeur n'a pas à deviner la tournure : on
+        # redemande une fois, plus fermement, avant de lui rendre l'identique.
+        for essai in range(2):
+            raw = _couper_repetition(
+                await self._chat(messages, num_predict=max(
+                    self._settings.generation_output_tokens, 3000))
+            )
+            revises, resume, signales = self._lire_bloc(
+                kind, sans_double_backslash(raw)
+            )
+            inchange = (
+                (kind == "resume" and resume.strip() == (current_summary or "").strip())
+                or (kind != "resume" and revises and target_index is not None
+                    and revises[0] == items[target_index])
+                or (kind != "resume" and revises and target_index is None
+                    and revises == items)
+            )
+            if not inchange or essai == 1:
+                warnings += [w for w in signales if w not in warnings]
+                if inchange:
+                    # La seconde tentative n'a rien donné non plus : on le
+                    # DIT, plutôt que de laisser l'écran chercher une
+                    # différence qui n'existe pas.
+                    warnings.append("REVISION_CHANGED_NOTHING")
+                break
+            logger.info("révision sans effet, on redemande", extra={"kind": kind})
+            messages.append({"role": "assistant", "content": raw[:2000]})
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "Ta réponse est identique à la version actuelle : tu "
+                        "n'as rien corrigé. Applique réellement la demande du "
+                        "professeur — s'il signale une erreur, elle est là, "
+                        "et il faut la réparer même si cela oblige à changer "
+                        "l'énoncé, les propositions, la bonne réponse ou "
+                        "l'explication. Garde le même format."
+                    ),
+                }
+            )
 
         if kind == "resume":
             if not resume:

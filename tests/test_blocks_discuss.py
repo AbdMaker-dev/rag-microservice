@@ -201,3 +201,51 @@ def test_un_cours_court_n_est_pas_tronque():
 
     assert draft.warnings == []
     assert COURS in llm.exchanges[0][1]["content"]
+
+
+def test_une_revision_sans_effet_est_redemandee_une_fois():
+    # Mesuré le 14/09/2026, deux fois 45 s sur le même quiz : « corrige les
+    # propositions ET la bonne réponse » corrige, « corrige la bonne
+    # réponse » ne touche à rien. Le professeur n'a pas à deviner la
+    # tournure : on redemande, plus fermement.
+    identique = ("### QUESTION\nForme trigonométrique de z = -1 + i ?\n"
+                 "- A) 2e^{i3pi/4}\n- B) racine(2)e^{-ipi/4}\n"
+                 "- C) racine(2)e^{i5pi/4}\n- D) 2\n"
+                 "### RÉPONSE A\n### EXPLICATION\nLe module vaut 2.")
+    corrige = ("### QUESTION\nForme trigonométrique de z = -1 + i ?\n"
+               "- A) racine(2)e^{i3pi/4}\n- B) 2e^{i3pi/4}\n"
+               "- C) racine(2)e^{-ipi/4}\n- D) 2\n"
+               "### RÉPONSE A\n### EXPLICATION\nLe module vaut racine de 2.")
+    llm = ScriptedLlm([identique, corrige])
+
+    draft = asyncio.run(CourseGenerator(
+        llm=llm, retriever=FakeRetriever(), settings=get_settings()
+    ).discuss_block(
+        kind="quiz", text=COURS, scope=SCOPE, current_items=QUIZ, target_index=0,
+        request="La bonne réponse est fausse."))
+
+    assert draft.quiz[0]["choices"][0] == "racine(2)e^{i3pi/4}"
+    assert "REVISION_CHANGED_NOTHING" not in draft.warnings
+    relance = llm.exchanges[1][-1]["content"]
+    assert "identique à la version actuelle" in relance
+
+
+def test_une_revision_deux_fois_sans_effet_est_signalee():
+    # Le modèle s'entête : on rend l'identique, mais on le DIT — sinon
+    # l'écran cherche une différence qui n'existe pas, et le professeur
+    # croit que son geste n'est pas parti.
+    identique = ("### QUESTION\nForme trigonométrique de z = -1 + i ?\n"
+                 "- A) 2e^{i3pi/4}\n- B) racine(2)e^{-ipi/4}\n"
+                 "- C) racine(2)e^{i5pi/4}\n- D) 2\n"
+                 "### RÉPONSE A\n### EXPLICATION\nLe module vaut 2.")
+    llm = ScriptedLlm([identique, identique])
+
+    draft = asyncio.run(CourseGenerator(
+        llm=llm, retriever=FakeRetriever(), settings=get_settings()
+    ).discuss_block(
+        kind="quiz", text=COURS, scope=SCOPE, current_items=QUIZ, target_index=0,
+        request="La bonne réponse est fausse."))
+
+    assert draft.quiz[0] == QUIZ[0]
+    assert "REVISION_CHANGED_NOTHING" in draft.warnings
+    assert len(llm.exchanges) == 2  # une seule relance, pas une boucle
