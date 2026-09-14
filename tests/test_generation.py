@@ -729,6 +729,51 @@ def test_un_retour_a_la_ligne_reste_un_retour_a_la_ligne():
     assert parsed["a"] == "première ligne\nne pas confondre"
 
 
+def test_une_formule_jamais_fermee_fait_redemander_le_bloc():
+    # Mesuré le 14/09/2026 sur des exercices de terminale : quatre « \\[ »
+    # pour deux « \\] » dans l'un, six pour deux dans l'autre. L'écran rend
+    # alors le LaTeX en clair et l'élève lit « \\frac{3}{4} » au lieu d'une
+    # fraction. On redemande une fois plutôt que de livrer l'illisible.
+    ouvert = json.dumps({"exercices": [
+        {"enonce": "Calculer", "corrige": "\\[ x = 1", "difficulte": "moyen"}]})
+    ferme = json.dumps({"exercices": [
+        {"enonce": "Calculer", "corrige": "\\[ x = 1 \\]", "difficulte": "moyen"}]})
+    llm = ScriptedLlm([ouvert, ferme])
+
+    draft = asyncio.run(_generator(llm).generate_blocks(
+        kind="exercices", text="Cours court.", scope=SCOPE))
+
+    assert draft.exercises[0]["solution"] == "\\[ x = 1 \\]"
+    relance = llm.exchanges[1][-1]["content"]
+    assert "restent ouvertes" in relance and "align" in relance
+    assert "MALFORMED_FORMULAS" not in draft.warnings
+
+
+def test_une_formule_toujours_bancale_est_livree_mais_signalee():
+    # Le professeur relit de toute façon : mieux vaut un exercice imparfait
+    # ET signalé qu'un exercice perdu. L'écran peut prévenir.
+    ouvert = json.dumps({"exercices": [
+        {"enonce": "Calculer", "corrige": "\\[ x = 1", "difficulte": "moyen"}]})
+    llm = ScriptedLlm([ouvert, ouvert])
+
+    draft = asyncio.run(_generator(llm).generate_blocks(
+        kind="exercices", text="Cours court.", scope=SCOPE))
+
+    assert draft.exercises[0]["solution"] == "\\[ x = 1"
+    assert "MALFORMED_FORMULAS" in draft.warnings
+
+
+def test_le_compte_des_formules_bancales():
+    from app.core.generation import formules_bancales
+
+    assert formules_bancales(r"Soit $u_0 = 2$ et \[ x = 1 \] fin") == 0
+    assert formules_bancales(r"\[ x < 4. Ainsi $u_n$ suit") == 1
+    assert formules_bancales(r"\begin{align*} x \end{align*}") == 0
+    assert formules_bancales(r"\begin{align*} x") == 1
+    assert formules_bancales("un dollar isolé $ ici") == 1
+    assert formules_bancales("texte sans formule") == 0
+
+
 def test_une_queue_repetitive_est_coupee_et_le_resume_sauve():
     # Mesuré le 14/09/2026 : le modèle a glissé en LaTeX puis répété
     # « \boldsymbol{ » sur 3 000 caractères, épuisant son budget de sortie —

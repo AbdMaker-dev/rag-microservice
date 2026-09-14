@@ -221,8 +221,11 @@ _TONE = (
 # nommément, et la queue répétitive est coupée de toute façon.
 _FORMULES = (
     " Écris les formules comme le cours : en ligne entre \\( et \\), "
-    "en bloc entre \\[ et \\]. Aucune décoration — ni \\boldsymbol, ni "
-    "\\mathbf, ni couleur : seulement ce qui porte du sens mathématique."
+    "en bloc entre \\[ et \\]. CHAQUE formule ouverte doit être fermée. "
+    "Une formule par bloc, jamais d'environnement align, eqnarray ou "
+    "gather — une ligne de calcul par bloc. Aucune décoration — ni "
+    "\\boldsymbol, ni \\mathbf, ni couleur. Ne sépare jamais deux lignes "
+    "par un caractère : le texte hors formule est du texte ordinaire."
 )
 
 
@@ -536,6 +539,45 @@ def _resume_tronque(raw: str) -> str:
     texte = "".join(out).strip()
     fin = max(texte.rfind("."), texte.rfind("!"), texte.rfind("?"))
     return texte[: fin + 1].strip() if fin > 0 else texte
+
+
+def _chaines(valeur) -> List[str]:
+    """Tout le texte d'un objet JSON lu, à plat — énoncés, corrigés,
+    questions, explications, quelle que soit sa forme."""
+
+    if isinstance(valeur, str):
+        return [valeur]
+    if isinstance(valeur, list):
+        return [texte for item in valeur for texte in _chaines(item)]
+    if isinstance(valeur, dict):
+        return [texte for item in valeur.values() for texte in _chaines(item)]
+    return []
+
+
+def formules_bancales(texte: str) -> int:
+    """Combien de délimiteurs de formule restent orphelins.
+
+    Une formule ouverte et jamais fermée n'est pas affichable : l'écran rend
+    alors le LaTeX en clair, et l'élève lit « \\frac{3}{4} » au lieu d'une
+    fraction. Mesuré le 14/09/2026 sur des exercices de terminale — quatre
+    « \\[ » pour deux « \\] » dans l'un, six pour deux dans l'autre.
+
+    On compte, on ne répare pas : fermer au hasard déplacerait la frontière
+    d'une formule, donc changerait les mathématiques.
+    """
+
+    orphelins = 0
+    for ouvrant, fermant in ((r"\[", r"\]"), (r"\(", r"\)")):
+        ouverts = len(re.findall(re.escape("\\" + ouvrant[1]), texte))
+        fermes = len(re.findall(re.escape("\\" + fermant[1]), texte))
+        orphelins += abs(ouverts - fermes)
+    # Les dollars vont par paires ; un compte impair laisse une formule
+    # ouverte jusqu'à la fin du texte.
+    orphelins += texte.count("$") % 2
+    orphelins += abs(
+        len(re.findall(r"\\begin\{", texte)) - len(re.findall(r"\\end\{", texte))
+    )
+    return orphelins
 
 
 def _blocks_budget_characters(context_tokens: int) -> int:
@@ -1523,6 +1565,37 @@ class CourseGenerator:
                     warnings.append("BLOCK_JSON_TRUNCATED")
                     parsed = {"resume": sauve}
             if parsed:
+                # Une formule ouverte et jamais fermée s'affiche en clair :
+                # l'élève lit « \frac{3}{4} » au lieu d'une fraction. On le
+                # constate et on redemande UNE fois — c'est moins cher qu'un
+                # exercice illisible, et le professeur n'a pas à réparer du
+                # LaTeX à la main.
+                bancales = formules_bancales("\n".join(_chaines(parsed)))
+                if bancales and attempt == 0:
+                    logger.warning(
+                        "formules mal fermées, on redemande",
+                        extra={"kind": kind, "orphelins": bancales},
+                    )
+                    messages.append({"role": "assistant", "content": raw[:2000]})
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                f"{bancales} formule(s) restent ouvertes sans "
+                                "être fermées. Recommence en fermant chaque "
+                                "\\[ par un \\], chaque \\( par un \\), et "
+                                "sans environnement align : une ligne de "
+                                "calcul par bloc. Réponds uniquement avec le "
+                                "JSON demandé."
+                            ),
+                        }
+                    )
+                    parsed = None
+                    continue
+                if bancales:
+                    # La seconde tentative n'a pas suffi : on livre, mais on
+                    # le DIT. Le professeur relit et l'écran peut prévenir.
+                    warnings.append("MALFORMED_FORMULAS")
                 break
             messages.append({"role": "assistant", "content": raw[:2000]})
             # Relancer le MÊME prompt rend la MÊME réponse : le modèle est
