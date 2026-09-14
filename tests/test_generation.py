@@ -751,6 +751,24 @@ def test_les_blocs_se_demandent_en_texte_balise_pas_en_json():
     assert llm.schemas == [None]
 
 
+def test_une_marque_a_remplir_recopiee_n_est_pas_du_contenu():
+    # Vu le 14/09/2026 sur une vraie génération : « <énoncé> » en tête de
+    # chaque exercice, recopié de la consigne. L'exemple de la consigne
+    # montre désormais du contenu réel ; ceci reste le filet.
+    reponse = ("### EXERCICE (facile)\n<énoncé>\nCalculer $u_1$.\n"
+               "### CORRIGÉ\n<corrigé>\nOn applique la relation.")
+    llm = ScriptedLlm([reponse])
+
+    draft = asyncio.run(_generator(llm).generate_blocks(
+        kind="exercices", text="Cours court.", scope=SCOPE, count=1))
+
+    assert draft.exercises[0]["statement"] == "Calculer $u_1$."
+    assert draft.exercises[0]["solution"] == "On applique la relation."
+    # La consigne montre un exercice complet, pas des marques à remplir.
+    consigne = llm.exchanges[0][0]["content"]
+    assert "<énoncé>" not in consigne and "3x² + 2" in consigne
+
+
 def test_un_quiz_balise_rend_ses_quatre_choix_et_sa_reponse():
     reponse = ("### QUESTION\nQue vaut la limite ?\n"
                "- A) 0\n- B) 2\n- C) 4\n- D) $+\\infty$\n"

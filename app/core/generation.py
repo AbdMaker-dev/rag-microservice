@@ -571,6 +571,20 @@ _CHOIX = re.compile(r"^\s*(?:[-*]\s*)?([ABCD])[).]\s*(.+?)\s*$", re.MULTILINE)
 _DIFFICULTES = ("facile", "moyen", "difficile")
 
 
+_MARQUE_A_REMPLIR = re.compile(r"^\s*<[^>\n]{1,40}>\s*$", re.MULTILINE)
+
+
+def _sans_marques(texte: str) -> str:
+    """Retirer les marques à remplir que le modèle recopie de l'exemple.
+
+    Vu le 14/09/2026 : « <énoncé> » en tête de chaque exercice, recopié de
+    la consigne. L'exemple donne maintenant du contenu réel plutôt que des
+    marques ; ceci reste le filet.
+    """
+
+    return _MARQUE_A_REMPLIR.sub("", texte).strip()
+
+
 def _decouper(texte: str, balise: re.Pattern) -> List[Tuple[str, str]]:
     """Découper un texte sur une balise de ligne.
 
@@ -584,7 +598,7 @@ def _decouper(texte: str, balise: re.Pattern) -> List[Tuple[str, str]]:
     for index, found in enumerate(trouvees):
         fin = trouvees[index + 1].start() if index + 1 < len(trouvees) else len(texte)
         capture = (found.group(1) or "") if found.re.groups else ""
-        morceaux.append((capture.strip(), texte[found.end() : fin].strip()))
+        morceaux.append((capture.strip(), _sans_marques(texte[found.end() : fin])))
     return morceaux
 
 
@@ -1611,12 +1625,14 @@ class CourseGenerator:
                 "juste, et la réponse doit se trouver dans le cours. Difficulté "
                 "progressive. Une explication courte par question (pourquoi "
                 "c'est la bonne réponse, en renvoyant au cours)." + _FORMULES
-                + " Réponds EXACTEMENT dans ce format, sans JSON :\n"
-                "### QUESTION\n<la question>\n"
-                "- A) <proposition>\n- B) <proposition>\n"
-                "- C) <proposition>\n- D) <proposition>\n"
-                "### RÉPONSE B\n### EXPLICATION\n<pourquoi>\n"
-                "(puis « ### QUESTION » pour la suivante)"
+                + " Réponds EXACTEMENT dans ce format, sans JSON, en "
+                "reprenant les lignes « ### » telles quelles :\n"
+                "### QUESTION\nQue vaut la dérivée de f(x) = 3x² ?\n"
+                "- A) 3x\n- B) 6x\n- C) x²\n- D) 6\n"
+                "### RÉPONSE B\n"
+                "### EXPLICATION\nOn multiplie par l'exposant puis on le "
+                "diminue de un.\n"
+                "### QUESTION\n…et ainsi de suite, une question par bloc."
             )
         else:
             demand = (
@@ -1624,9 +1640,14 @@ class CourseGenerator:
                 "difficulté progressive (facile → difficile), chacun avec son "
                 "CORRIGÉ pas à pas. Les exercices ne mobilisent que ce que le "
                 "cours enseigne." + _FORMULES
-                + " Réponds EXACTEMENT dans ce format, sans JSON :\n"
-                "### EXERCICE (facile)\n<énoncé>\n### CORRIGÉ\n<corrigé>\n"
-                "(puis « ### EXERCICE (moyen) » pour le suivant)"
+                + " Réponds EXACTEMENT dans ce format, sans JSON, en "
+                "reprenant les lignes « ### » telles quelles :\n"
+                "### EXERCICE (facile)\n"
+                "Calculer la dérivée de f(x) = 3x² + 2.\n"
+                "### CORRIGÉ\n"
+                "On dérive terme à terme : f'(x) = 6x.\n"
+                "### EXERCICE (moyen)\n"
+                "…et ainsi de suite, un exercice par bloc."
             )
 
         messages = [
