@@ -831,8 +831,57 @@ def test_une_formule_jamais_fermee_fait_redemander_le_bloc():
 
     assert draft.exercises[0]["solution"] == "\\[ x = 1 \\]"
     relance = llm.exchanges[1][-1]["content"]
-    assert "restent ouvertes" in relance and "align" in relance
+    assert "mal écrites" in relance and "align" in relance
     assert "MALFORMED_FORMULAS" not in draft.warnings
+
+
+def test_une_commande_hors_delimiteur_fait_redemander_le_bloc():
+    # Vu le 14/09/2026 dans un corrigé : « z' - \\omega = ke^{i\\theta}(z -
+    # \\omega) » seule sur sa ligne, sans délimiteur. L'élève lit le code au
+    # lieu de la formule — aussi illisible qu'une formule jamais fermée, et
+    # traité pareil.
+    nue = ("### EXERCICE (moyen)\nCalculer\n### CORRIGÉ\n"
+           "z' - \\omega = ke^{i\\theta}(z - \\omega)")
+    correcte = ("### EXERCICE (moyen)\nCalculer\n### CORRIGÉ\n"
+                "\\[ z' - \\omega = ke^{i\\theta}(z - \\omega) \\]")
+    llm = ScriptedLlm([nue, correcte])
+
+    draft = asyncio.run(_generator(llm).generate_blocks(
+        kind="exercices", text="Cours court.", scope=SCOPE, count=1))
+
+    assert draft.exercises[0]["solution"].startswith("\\[")
+    assert "hors de tout délimiteur" in llm.exchanges[1][-1]["content"]
+
+
+def test_un_backslash_en_trop_devant_une_commande_est_retire():
+    # « \\\\right » au lieu de « \\right », une fois sur 211 commandes —
+    # reste d'une habitude JSON. Un vrai « \\\\ » LaTeX est un saut de ligne :
+    # il n'est jamais suivi d'une lettre, la réparation est donc sûre.
+    reponse = ("### EXERCICE (facile)\nCalculer\n### CORRIGÉ\n"
+               "\\[ i\\sin\\left(\\frac{\\pi}{6}\\\\right) \\]")
+    llm = ScriptedLlm([reponse])
+
+    draft = asyncio.run(_generator(llm).generate_blocks(
+        kind="exercices", text="Cours court.", scope=SCOPE, count=1))
+
+    assert draft.exercises[0]["solution"] == (
+        "\\[ i\\sin\\left(\\frac{\\pi}{6}\\right) \\]")
+
+
+def test_un_texte_sans_la_moindre_formule_passe_sans_bruit():
+    # Français, histoire, anglais : aucune commande, donc aucun contrôle ne
+    # se déclenche. Les gardes des formules ne connaissent pas les
+    # mathématiques, ils ne connaissent que les délimiteurs.
+    reponse = ("### EXERCICE (facile)\nRelevez les figures de style du "
+               "premier quatrain.\n### CORRIGÉ\nUne métaphore filée et une "
+               "allitération en « s ».")
+    llm = ScriptedLlm([reponse])
+
+    draft = asyncio.run(_generator(llm).generate_blocks(
+        kind="exercices", text="Cours de français.", scope=SCOPE, count=1))
+
+    assert draft.warnings == []
+    assert len(llm.exchanges) == 1  # aucune relance
 
 
 def test_une_formule_toujours_bancale_est_livree_mais_signalee():

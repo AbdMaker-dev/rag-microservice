@@ -695,6 +695,62 @@ def _chaines(valeur) -> List[str]:
     return []
 
 
+_COMMANDE_LATEX = re.compile(r"\\[a-zA-Z]+")
+_DOUBLE_BACKSLASH = re.compile(r"\\\\(?=[a-zA-Z])")
+
+
+def sans_double_backslash(texte: str) -> str:
+    r"""Un « \\ » suivi d'une LETTRE est un backslash en trop.
+
+    Vu le 14/09/2026 : « \\right » au lieu de « \right », une fois sur 211
+    commandes — reste d'une habitude JSON. La condition « suivi d'une
+    lettre » rend la réparation sûre : un vrai « \\ » LaTeX est un saut de
+    ligne, il est suivi d'un retour à la ligne ou d'une espace, jamais d'une
+    lettre.
+    """
+
+    return _DOUBLE_BACKSLASH.sub("\\\\", texte)
+
+
+def _segments_hors_formule(texte: str) -> List[str]:
+    """Les morceaux de texte qui ne sont PAS dans une formule."""
+
+    dehors: List[str] = []
+    courant: List[str] = []
+    index = 0
+    dans = False
+    while index < len(texte):
+        paire = texte[index : index + 2]
+        if not dans and (paire in ("\\(", "\\[") or texte.startswith("\\begin{", index)):
+            dans = True
+        elif dans and (paire in ("\\)", "\\]") or texte.startswith("\\end{", index)):
+            dans = False
+            index += 2
+            continue
+        elif texte[index] == "$":
+            dans = not dans
+        if not dans:
+            courant.append(texte[index])
+        elif courant:
+            dehors.append("".join(courant))
+            courant = []
+        index += 1
+    if courant:
+        dehors.append("".join(courant))
+    return dehors
+
+
+def commandes_hors_formule(texte: str) -> int:
+    """Combien de commandes LaTeX traînent hors de tout délimiteur.
+
+    Une commande hors formule ne s'affiche pas : l'élève lit
+    « z' - \\omega = ke^{i\\theta}(z - \\omega) » en clair. Vu le 14/09/2026
+    sur une ligne entière d'un corrigé.
+    """
+
+    return sum(len(_COMMANDE_LATEX.findall(part)) for part in _segments_hors_formule(texte))
+
+
 def formules_bancales(texte: str) -> int:
     """Combien de délimiteurs de formule restent orphelins.
 
@@ -1714,14 +1770,18 @@ class CourseGenerator:
                     extra={"kind": kind, "avant": len(raw), "apres": len(coupe)},
                 )
 
-            items, summary, signales = self._lire_bloc(kind, coupe)
+            items, summary, signales = self._lire_bloc(kind, sans_double_backslash(coupe))
             for signal in signales:
                 if signal not in warnings:
                     warnings.append(signal)
             if items or summary:
-                bancales = formules_bancales(
-                    summary or "\n".join(_chaines(items))
-                )
+                texte_produit = summary or "\n".join(_chaines(items))
+                bancales = formules_bancales(texte_produit)
+                # Une commande hors de tout délimiteur ne s'affiche pas plus
+                # qu'une formule jamais fermée : l'élève lit le code. Les deux
+                # se traitent ensemble — même relance, même avertissement.
+                nues = commandes_hors_formule(texte_produit)
+                bancales += nues
                 if bancales and attempt == 0:
                     logger.warning(
                         "formules mal fermées, on redemande",
@@ -1732,12 +1792,14 @@ class CourseGenerator:
                         {
                             "role": "user",
                             "content": (
-                                f"{bancales} formule(s) restent ouvertes sans "
-                                "être fermées. Recommence en fermant chaque "
-                                "\\[ par un \\], chaque \\( par un \\), et sans "
-                                "environnement align : une ligne de calcul "
-                                "par bloc. Garde exactement le même format de "
-                                "réponse."
+                                f"{bancales} formule(s) sont mal écrites : "
+                                "soit ouvertes sans être fermées, soit "
+                                "laissées hors de tout délimiteur. "
+                                "Recommence : TOUTE commande doit être dans "
+                                "\\( … \\) ou \\[ … \\], chaque ouverture doit "
+                                "être fermée, et aucun environnement align — "
+                                "une ligne de calcul par bloc. Garde "
+                                "exactement le même format de réponse."
                             ),
                         }
                     )
