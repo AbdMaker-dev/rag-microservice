@@ -203,3 +203,37 @@ def test_des_resumes_courts_ne_sont_pas_tronques():
         sources=[{"heading": "Suites", "text": "Le résumé validé du cours. " * 10}]))
 
     assert epreuve.warnings == []
+
+
+def test_un_accent_egare_dans_une_epreuve_est_signale():
+    """« d\u2019\u0308finie » pour « définie » : relevé sur le premier devoir
+    composé sur le serveur (14/09/2026), l'accent posé sur une apostrophe.
+
+    On ne répare pas — un tréma égaré peut venir de « é », de « ë » ou d'un
+    mot tout autre. On le DIT, et le professeur relit avant de publier.
+    """
+
+    abime = json.dumps({"titre": "Devoir", "consignes": "",
+                        "exercices": [{"enonce": "Soit la suite d\u2019\u0308finie par u_0 = 2",
+                                       "corrige": "C1", "points": 20, "couvre": ["Suites"]}]})
+    epreuve = asyncio.run(_gen([abime]).compose_assessment(
+        kind="devoir", scope=SCOPE, total_points=20, exercise_count=1,
+        sources=[{"heading": "Suites", "text": "Le résumé du cours. " * 10}]))
+
+    assert "DAMAGED_ACCENTS" in epreuve.warnings
+    # Le texte est rendu tel quel : visible, pas deviné.
+    assert "d\u2019\u0308finie" in epreuve.exercises[0]["statement"]
+
+
+def test_les_accents_normaux_ne_sont_jamais_signales():
+    # « majorée », « école », « l'élève » en forme décomposée : l'accent suit
+    # sa lettre, tout va bien. Un garde qui crie sur du texte juste serait
+    # aussi inutile qu'un garde muet.
+    sain = json.dumps({"titre": "Devoir", "consignes": "",
+                       "exercices": [{"enonce": "La suite majore\u0301e converge, l\u2019e\u0301le\u0300ve conclut.",
+                                      "corrige": "C1", "points": 20, "couvre": ["Suites"]}]})
+    epreuve = asyncio.run(_gen([sain]).compose_assessment(
+        kind="devoir", scope=SCOPE, total_points=20, exercise_count=1,
+        sources=[{"heading": "Suites", "text": "Le résumé du cours. " * 10}]))
+
+    assert "DAMAGED_ACCENTS" not in epreuve.warnings

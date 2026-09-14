@@ -819,6 +819,25 @@ def commandes_hors_formule(texte: str) -> int:
     return sum(len(_COMMANDE_LATEX.findall(part)) for part in _segments_hors_formule(texte))
 
 
+# Un accent combinant se pose sur la lettre qui le précède. S'il en suit une
+# autre chose — une apostrophe, une espace, un chiffre — il est tombé au
+# mauvais endroit et le mot est abîmé. Relevé le 14/09/2026 sur le premier
+# devoir composé : « d’̈finie » pour « définie », l'accent posé sur une
+# apostrophe. Le même défaut avait donné « majoŕee » et « étudíe » dans des
+# exercices le matin.
+#
+# On ne répare pas : un tréma égaré peut venir de « é », « ë » ou d'un mot
+# entièrement autre, et deviner reviendrait à écrire à la place du modèle.
+# On COMPTE, et le professeur relit — c'est la règle de toute cette famille.
+_ACCENT_EGARE = re.compile(r"(?<![^\W\d_])[̀-ͯ]")
+
+
+def accents_egares(texte: str) -> int:
+    """Combien d'accents combinants ne se posent sur aucune lettre."""
+
+    return len(_ACCENT_EGARE.findall(texte))
+
+
 def formules_bancales(texte: str) -> int:
     """Combien de délimiteurs de formule restent orphelins.
 
@@ -1983,6 +2002,10 @@ class CourseGenerator:
                 # se traitent ensemble — même relance, même avertissement.
                 nues = commandes_hors_formule(texte_produit)
                 bancales += nues
+                # Un accent tombé à côté abîme un mot aussi sûrement qu'une
+                # formule mal fermée abîme un calcul : même relance.
+                egares = accents_egares(texte_produit)
+                bancales += egares
                 if bancales and attempt == 0:
                     logger.warning(
                         "formules mal fermées, on redemande",
@@ -2280,6 +2303,16 @@ class CourseGenerator:
             )
         if dropped:
             warnings.append("ASSESSMENT_ITEMS_DROPPED")
+        abimes = sum(
+            accents_egares(str(e.get(champ, "")))
+            for e in exercises
+            for champ in ("statement", "solution")
+        )
+        if abimes:
+            # « d'̈finie » pour « définie » : un mot abîmé dans un énoncé se
+            # voit à l'écran et fait douter l'élève. Le professeur relit.
+            warnings.append("DAMAGED_ACCENTS")
+            logger.warning("accents égarés dans une épreuve", extra={"combien": abimes})
         if not exercises:
             raise GenerationFailed("aucun exercice d'épreuve exploitable : relancer")
 
