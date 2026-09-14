@@ -661,6 +661,35 @@ def test_un_caractere_de_controle_rend_sa_commande_latex():
     assert exercice["corrige"] == "\\begin{align*} 2 \\times 3 \\end{align*}"
 
 
+def test_la_tabulation_est_reparee_comme_les_autres():
+    # Le cas sournois : une tabulation ressemble à de l'espacement légitime.
+    # Un premier relevé a conclu « 0 abîmé » sur deux cours qui en portaient
+    # 46, parce qu'il excluait U+0009. Toutes les commandes en \t sont
+    # concernées : \text, \times, \theta, \tau, \tan, \to.
+    from app.core.generation import _parse_json_block
+
+    parsed = _parse_json_block(
+        '{"a": "\\\\frac{\theta}{2}", "b": "4 \times 1", "c": "\text{si}"}'
+    )
+
+    assert parsed["a"] == "\\frac{\\theta}{2}"
+    assert parsed["b"] == "4 \\times 1"
+    assert parsed["c"] == "\\text{si}"
+
+
+def test_une_tabulation_d_indentation_n_est_pas_signalee():
+    # Le relevé de ce qui reste abîmé exige une LETTRE après le contrôle :
+    # une vraie tabulation d'indentation est suivie d'une espace ou d'un
+    # retour à la ligne. Sans cette condition il fallait exclure la
+    # tabulation, et c'est ce trou qui a masqué le défaut.
+    from app.core.generation import _reparer_controles
+
+    texte, restants = _reparer_controles("ligne\n\t  suite indentée")
+
+    assert texte == "ligne\n\t  suite indentée"
+    assert restants == 0
+
+
 def test_on_ne_devine_pas_une_commande_inconnue():
     # Un saut de page peut venir de \frac, \forall ou \fbox : si la suite ne
     # correspond à aucune commande connue, on laisse le texte tel quel. Mieux

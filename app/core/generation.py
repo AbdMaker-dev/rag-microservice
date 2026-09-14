@@ -275,7 +275,15 @@ _CONTROLE_VERS_LETTRE = {"\b": "b", "\f": "f", "\t": "t", "\r": "r"}
 # une ligne qui commence par « ne » est du français, pas « \ne ». On le
 # signale, on ne le devine pas.
 _CONTROLES_A_REPARER = "".join(_CONTROLE_VERS_LETTRE)
-_CONTROLES_RESTANTS = re.compile(r"[\x00-\x08\x0b-\x1f]")
+# Ce qui reste abîmé après réparation : un caractère de contrôle SUIVI D'UNE
+# LETTRE. La condition compte — une tabulation d'indentation est suivie d'une
+# espace ou d'un retour à la ligne, jamais d'une lettre. Sans elle, il
+# fallait exclure la tabulation du relevé pour éviter les faux positifs, et
+# c'est précisément ce qui a laissé passer « \t » + « heta » le 14/09/2026 :
+# un premier relevé a conclu « 0 abîmé » sur des cours qui en portaient 46.
+# La tabulation est le cas sournois de cette famille : elle ressemble à de
+# l'espacement légitime là où un saut de page saute aux yeux.
+_CONTROLES_RESTANTS = re.compile(r"[\x00-\x09\x0b-\x1f](?=[A-Za-z])")
 
 
 def _reparer_controles(texte: str) -> Tuple[str, int]:
