@@ -643,6 +643,46 @@ def test_le_decoupage_respecte_les_paragraphes():
     assert _split_course(texte, 5_000) == [texte]
 
 
+def test_un_caractere_de_controle_rend_sa_commande_latex():
+    # Mesuré le 14/09/2026 sur les exercices d'un cours de terminale : le
+    # modèle émet le CARACTÈRE DE CONTRÔLE lui-même au lieu de « \f », il n'y
+    # a donc plus de backslash à protéger, et json.loads(strict=False) accepte
+    # l'octet sans broncher — « \frac{3}{4} » devenait « ␌rac{3}{4} ».
+    # 8 champs sur 10 abîmés, aucune erreur levée.
+    from app.core.generation import _parse_json_block
+
+    brut = ('{"exercices": [{"enonce": "u = \x0crac{3}{4} u_n",'
+            ' "corrige": "\x08egin{align*} 2 \x09imes 3 \\\\end{align*}",'
+            ' "difficulte": "moyen"}]}')
+
+    exercice = _parse_json_block(brut)["exercices"][0]
+
+    assert exercice["enonce"] == "u = \\frac{3}{4} u_n"
+    assert exercice["corrige"] == "\\begin{align*} 2 \\times 3 \\end{align*}"
+
+
+def test_on_ne_devine_pas_une_commande_inconnue():
+    # Un saut de page peut venir de \frac, \forall ou \fbox : si la suite ne
+    # correspond à aucune commande connue, on laisse le texte tel quel. Mieux
+    # vaut un caractère visible qu'une formule que personne n'a écrite.
+    from app.core.generation import _parse_json_block
+
+    parsed = _parse_json_block('{"a": "texte \x0czzz suite"}')
+
+    assert parsed["a"] == "texte \x0czzz suite"
+
+
+def test_un_retour_a_la_ligne_reste_un_retour_a_la_ligne():
+    # « \ne » existe en LaTeX, et une ligne française qui commence par « ne »
+    # aussi. On ne répare jamais un retour à la ligne : le risque est d'un
+    # côté une formule perdue, de l'autre une phrase détruite.
+    from app.core.generation import _parse_json_block
+
+    parsed = _parse_json_block('{"a": "première ligne\nne pas confondre"}')
+
+    assert parsed["a"] == "première ligne\nne pas confondre"
+
+
 def test_une_queue_repetitive_est_coupee_et_le_resume_sauve():
     # Mesuré le 14/09/2026 : le modèle a glissé en LaTeX puis répété
     # « \boldsymbol{ » sur 3 000 caractères, épuisant son budget de sortie —

@@ -251,10 +251,81 @@ _LATEX_COMMANDS = (
     # JAMAIS « u », « b » ni « f » seuls : « \uXXXX » est un échappement
     # unicode JSON (les accents !), le doubler rendait « \u00e9 » littéral.
 )
+_LATEX_TRIEES = sorted(_LATEX_COMMANDS, key=len, reverse=True)
 _LATEX_ESCAPE = re.compile(
-    r"(?<!\\)\\(" + "|".join(sorted(_LATEX_COMMANDS, key=len, reverse=True))
-    + r")(?![a-zA-Z])"
+    r"(?<!\\)\\(" + "|".join(_LATEX_TRIEES) + r")(?![a-zA-Z])"
 )
+
+
+# Le modèle n'écrit pas toujours « \frac » comme deux caractères : en sortie
+# structurée, il émet parfois LE CARACTÈRE DE CONTRÔLE lui-même — un saut de
+# page à la place de « \f ». Il n'y a alors plus de backslash à protéger, et
+# `json.loads(strict=False)` accepte ces octets sans broncher : la lecture
+# réussit et rend « ␌rac{3}{4} ». Mesuré le 14/09/2026 sur les exercices d'un
+# cours de terminale — 8 champs sur 10 abîmés, et personne n'a rien vu.
+#
+# Ce qui suit le contrôle dit de quelle commande il vient : « ␌ » + « rac »
+# ne peut être que « \frac ». On ne répare QUE si le reste correspond
+# exactement à une commande connue — sinon on laisse et on le signale.
+# Exactement les échappements que JSON reconnaît et qui donnent un caractère
+# de contrôle : \b \f \n \r \t. Pas « \v » — JSON ne le connaît pas, donc une
+# tabulation verticale ne peut pas venir d'une commande mangée.
+_CONTROLE_VERS_LETTRE = {"\b": "b", "\f": "f", "\t": "t", "\r": "r"}
+# Le retour à la ligne est absent EXPRÈS : il est légitime dans un texte, et
+# une ligne qui commence par « ne » est du français, pas « \ne ». On le
+# signale, on ne le devine pas.
+_CONTROLES_A_REPARER = "".join(_CONTROLE_VERS_LETTRE)
+_CONTROLES_RESTANTS = re.compile(r"[\x00-\x08\x0b-\x1f]")
+
+
+def _reparer_controles(texte: str) -> Tuple[str, int]:
+    """Rendre à un texte les commandes LaTeX qu'un caractère de contrôle a
+    mangées. Renvoie le texte et le nombre de contrôles restants."""
+
+    if not any(c in texte for c in _CONTROLES_A_REPARER):
+        return texte, len(_CONTROLES_RESTANTS.findall(texte))
+    out: List[str] = []
+    index = 0
+    while index < len(texte):
+        char = texte[index]
+        lettre = _CONTROLE_VERS_LETTRE.get(char)
+        if lettre is None:
+            out.append(char)
+            index += 1
+            continue
+        suite = texte[index + 1 :]
+        commande = next(
+            (
+                nom
+                for nom in _LATEX_TRIEES
+                if nom[0] == lettre
+                and suite.startswith(nom[1:])
+                and not suite[len(nom) - 1 : len(nom)].isalpha()
+            ),
+            None,
+        )
+        if commande is None:
+            out.append(char)
+            index += 1
+            continue
+        out.append("\\" + commande)
+        index += len(commande)
+    repare = "".join(out)
+    return repare, len(_CONTROLES_RESTANTS.findall(repare))
+
+
+def _reparer_en_profondeur(valeur, compteur: List[int]):
+    """Appliquer la réparation à toutes les chaînes d'un objet JSON lu."""
+
+    if isinstance(valeur, str):
+        texte, restants = _reparer_controles(valeur)
+        compteur[0] += restants
+        return texte
+    if isinstance(valeur, list):
+        return [_reparer_en_profondeur(v, compteur) for v in valeur]
+    if isinstance(valeur, dict):
+        return {k: _reparer_en_profondeur(v, compteur) for k, v in valeur.items()}
+    return valeur
 
 
 def _balanced_blocks(raw: str) -> List[str]:
@@ -299,6 +370,7 @@ def _parse_json_block(raw: str) -> Optional[dict]:
     """
 
     merged: dict = {}
+    restants = [0]
     for block in _balanced_blocks(raw):
         # La réparation d'abord : depuis les sorties structurées, le JSON
         # est valide même quand « \frac » y est un saut de page — la lecture
@@ -311,9 +383,19 @@ def _parse_json_block(raw: str) -> Optional[dict]:
             except json.JSONDecodeError:
                 continue
             if isinstance(parsed, dict):
-                merged.update(parsed)
+                # Les commandes LaTeX qu'un caractère de contrôle a mangées
+                # se rendent ici, une fois le JSON lu : on travaille sur les
+                # valeurs, jamais sur la syntaxe.
+                merged.update(_reparer_en_profondeur(parsed, restants))
             break
     if merged:
+        if restants[0]:
+            # Ce qui n'a pas pu être rendu à une commande connue reste là,
+            # visible. Le taire rendrait un texte faux qui a l'air juste.
+            logger.warning(
+                "caractères de contrôle non réparables dans la réponse",
+                extra={"restants": restants[0]},
+            )
         return merged
     logger.warning(
         "réponse du modèle illisible en JSON",
