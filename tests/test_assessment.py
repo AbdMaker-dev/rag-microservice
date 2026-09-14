@@ -237,3 +237,75 @@ def test_les_accents_normaux_ne_sont_jamais_signales():
         sources=[{"heading": "Suites", "text": "Le résumé du cours. " * 10}]))
 
     assert "DAMAGED_ACCENTS" not in epreuve.warnings
+
+
+class RetrieverAvecAnnales(FakeRetriever):
+    """Le périmètre porte deux annales indexées."""
+
+    async def search(self, *, query, scope, limit, max_excerpt_characters,
+                     course_id=None, role=None, document_ids=None):
+        self.calls.append({"query": query, "role": role, "course_id": course_id})
+        if role == "annale":
+            from app.core.retrieval import Passage
+            return [
+                Passage(chunk_id="a1", document_id="bac-2024", title="Bac S2 2024",
+                        locator="p. 2", content="Exercice 1 (5 points) — Le plan complexe…",
+                        language="fr", score=0.9),
+                Passage(chunk_id="a2", document_id="bac-2023", title="Bac S2 2023",
+                        locator="p. 1", content="Exercice 2 (4 points) — Suites et limites…",
+                        language="fr", score=0.8),
+            ]
+        return []
+
+
+def test_une_epreuve_puise_dans_les_annales_du_perimetre():
+    """Demande d'Alioune (14/09/2026) : « lors de la proposition des devoirs
+    et exercices, il faut que l'IA puise dans les annales ».
+
+    Le rôle « annale » existait dans l'index depuis le début — mais rien ne
+    l'y cherchait, ni la rédaction ni la composition. Une annale déposée
+    n'aurait servi à personne.
+    """
+
+    reponse = json.dumps({"titre": "Devoir", "consignes": "",
+                          "exercices": [{"enonce": "E1", "corrige": "C1", "points": 20,
+                                         "couvre": ["Suites"]}]})
+    llm = ScriptedLlm([reponse])
+    retriever = RetrieverAvecAnnales()
+    generateur = CourseGenerator(llm=llm, retriever=retriever, settings=get_settings())
+
+    asyncio.run(generateur.compose_assessment(
+        kind="devoir", scope=SCOPE, total_points=20, exercise_count=1,
+        sources=[{"heading": "Suites", "text": "Le résumé validé. " * 10}]))
+
+    # La recherche est faite sur le PÉRIMÈTRE, pas sur un cours : une annale
+    # est commune à la classe, comme un programme officiel.
+    appel = [c for c in retriever.calls if c["role"] == "annale"][0]
+    assert appel["course_id"] is None
+    assert "Suites" in appel["query"]
+    # Les annales accompagnent les cours dans la demande, étiquetées.
+    demande = llm.exchanges[0][-1]["content"]
+    assert "### ANNALE 1 — Bac S2 2024 (p. 2)" in demande
+    assert "Le plan complexe" in demande
+    # Et le modèle sait quoi en faire : le ton et le niveau, pas le contenu.
+    consigne = llm.exchanges[0][0]["content"]
+    assert "ne recopie aucun de leurs exercices" in consigne.lower()
+
+
+def test_sans_annale_la_composition_se_fait_comme_avant():
+    # Le cas d'aujourd'hui : aucune annale déposée. Rien ne change, et
+    # surtout rien n'échoue.
+    reponse = json.dumps({"titre": "Devoir", "consignes": "",
+                          "exercices": [{"enonce": "E1", "corrige": "C1", "points": 20,
+                                         "couvre": ["Suites"]}]})
+    llm = ScriptedLlm([reponse])
+    generateur = CourseGenerator(llm=llm, retriever=FakeRetriever(),
+                                 settings=get_settings())
+
+    epreuve = asyncio.run(generateur.compose_assessment(
+        kind="devoir", scope=SCOPE, total_points=20, exercise_count=1,
+        sources=[{"heading": "Suites", "text": "Le résumé validé. " * 10}]))
+
+    assert epreuve.exercises[0]["points"] == 20
+    assert "ANNALE" not in llm.exchanges[0][-1]["content"]
+    assert "annales accompagnent" not in llm.exchanges[0][0]["content"]

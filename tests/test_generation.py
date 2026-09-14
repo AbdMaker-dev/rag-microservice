@@ -29,6 +29,13 @@ class FakeRetriever:
         self.calls.append({"query": query, "course_id": course_id, "role": role})
         if role == "programme-officiel":
             return [_passage("prog", "Compétences exigibles : produit scalaire.")]
+        # Une base sans annales, qui est l'état de la plateforme aujourd'hui.
+        # Le double doit dire la vérité sur ce qu'il reproduit : rendre un
+        # passage pour TOUT rôle lui faisait inventer des annales là où il
+        # n'y en a aucune, et un test « sans annale » passait pour de mauvaises
+        # raisons. Les tests qui en veulent utilisent un double qui en a.
+        if role == "annale":
+            return []
         return [_passage("supp", "Définition du produit scalaire, projeté orthogonal.")]
 
 

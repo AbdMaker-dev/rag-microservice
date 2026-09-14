@@ -45,7 +45,12 @@ logger = logging.getLogger(__name__)
 
 _LABEL = re.compile(r"\[(?:S|P)\d+\]")
 _ADDITION = "⟦AJOUT⟧"
-_ROLES = {"support-cours", "programme-officiel"}
+# Ce que le modèle a le droit de chercher lui-même pendant une rédaction.
+# « annale » s'y ajoute le 14/09/2026 : le rôle existait dans l'index depuis
+# le début, mais rien ne l'y cherchait jamais — une annale déposée n'aurait
+# servi à personne. Demande d'Alioune : « ajouter une annale permet à l'IA
+# d'avoir vraiment des ressources pour proposer des exercices ».
+_ROLES = {"support-cours", "programme-officiel", "annale"}
 
 
 class GenerationFailed(RuntimeError):
@@ -2209,9 +2214,42 @@ class CourseGenerator:
         # c'est ce qui est arrivé au tout premier devoir composé sur le
         # serveur (14/09/2026 : un cours validé de 28 000 caractères, refusé
         # à la porte). On borne, on prévient, on compose.
+        headings = [source["heading"] for source in sources]
+
+        # Les ANNALES du périmètre — les vrais sujets tombés les années
+        # passées. Demandé par Alioune le 14/09/2026 : « que l'IA puise dans
+        # les annales quand elle propose des exercices de devoir ». Sans
+        # elles, la composition n'avait pour toute matière que les résumés
+        # des cours, et rendait des exercices d'application sages là où un
+        # devoir de terminale doit ressembler à ce qui tombe au bac.
+        #
+        # Elles ne remplacent pas les cours : elles donnent le TON, le
+        # niveau, la forme des énoncés. Ce qui est demandé reste ce que les
+        # cours enseignent — une épreuve qui sort du couvert est un piège.
+        annales: List[Passage] = []
+        if self._retriever is not None:
+            try:
+                annales = await self._retriever.search(
+                    query=" ".join(headings) or (title or "épreuve"),
+                    scope=scope,
+                    limit=3,
+                    max_excerpt_characters=1200,
+                    role="annale",
+                )
+            except Exception:  # noqa: BLE001
+                # Une base sans annales, ou une recherche en panne, ne doit
+                # pas empêcher de composer : le devoir se fait sans elles.
+                logger.warning("recherche d'annales impossible, on compose sans")
+
+        # Ce qui reste de la fenêtre après les annales se partage également
+        # entre les cours : aucun n'est sacrifié pour un autre.
+        place_annales = sum(len(p.content) for p in annales) + 200 * len(annales)
         part = max(
             800,
-            _blocks_budget_characters(self._settings.generation_context_tokens)
+            (
+                _blocks_budget_characters(self._settings.generation_context_tokens)
+                - place_annales
+            )
             // max(1, len(sources)),
         )
         tronques = [s for s in sources if len(s["text"]) > part]
@@ -2219,7 +2257,11 @@ class CourseGenerator:
             f"### COURS {index} — {source['heading']}\n{source['text'][:part]}"
             for index, source in enumerate(sources, start=1)
         )
-        headings = [source["heading"] for source in sources]
+        if annales:
+            corpus += "\n\n" + "\n\n".join(
+                f"### ANNALE {index} — {p.title} ({p.locator})\n{p.content}"
+                for index, p in enumerate(annales, start=1)
+            )
 
         messages = [
             {
@@ -2235,14 +2277,33 @@ class CourseGenerator:
                     "couvrant l'ENSEMBLE des cours fournis — chacun avec son "
                     "corrigé détaillé et son barème. N'utilise QUE ce que ces "
                     "cours enseignent. Indique pour chaque exercice le ou les "
-                    "cours qu'il couvre, par leur titre exact. Réponds "
+                    "cours qu'il couvre, par leur titre exact."
+                    + (
+                        " Des ANNALES accompagnent les cours : ce sont de "
+                        "vrais sujets tombés les années passées. Inspire-toi "
+                        "de leur FORME et de leur NIVEAU d'exigence — la "
+                        "façon dont un énoncé est posé, le découpage en "
+                        "questions, ce qu'on attend d'un élève. Mais ne "
+                        "recopie aucun de leurs exercices et ne demande rien "
+                        "qui ne soit dans les cours ci-dessus."
+                        if annales
+                        else ""
+                    )
+                    + " Réponds "
                     'UNIQUEMENT en JSON : {"titre": "...", "consignes": '
                     '"...", "exercices": [{"enonce": "...", "corrige": "...", '
                     '"points": 5, "couvre": ["titre du cours"]}]}'
                     + (f" Consigne du professeur : {instruction}" if instruction else "")
                 ),
             },
-            {"role": "user", "content": f"LES COURS COUVERTS :\n\n{corpus}"},
+            {
+                "role": "user",
+                "content": (
+                    "LES COURS COUVERTS"
+                    + (" ET LES ANNALES DU PÉRIMÈTRE" if annales else "")
+                    + f" :\n\n{corpus}"
+                ),
+            },
         ]
 
         parsed = None
