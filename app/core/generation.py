@@ -219,6 +219,16 @@ _TONE = (
 # Reste la leçon du jour : « \boldsymbol » répété trois mille fois. Ce n'est
 # pas le LaTeX qui a fait ça, c'est la DÉCORATION — on l'interdit, elle,
 # nommément, et la queue répétitive est coupée de toute façon.
+# L'exemple de mise en forme, au même endroit que le filet qui le retire :
+# montrer un exercice réel a fait qu'un modèle l'a rendu comme une vraie
+# question — « Que vaut la dérivée de f(x) = 3x² ? » dans un quiz sur les
+# suites numériques (14/09/2026). Il est donc choisi ÉTRANGER au domaine
+# (une capitale), annoncé comme tel dans la consigne, et retiré s'il revient.
+_EXEMPLE_ENONCE = "Quelle est la capitale du Sénégal ?"
+_EXEMPLE_CORRIGE = "C'est Dakar, sur la presqu'île du Cap-Vert."
+_EXEMPLE_QUESTION = "Quelle est la capitale du Sénégal ?"
+
+
 _FORMULES = (
     " Écris les formules comme le cours : en ligne entre \\( et \\), "
     "en bloc entre \\[ et \\]. CHAQUE formule ouverte doit être fermée. "
@@ -656,6 +666,20 @@ def lire_quiz(texte: str) -> List[dict]:
             }
         )
     return questions
+
+
+def _vient_de_l_exemple(item: dict) -> bool:
+    """L'item est-il l'exemple de mise en forme, recopié tel quel ?
+
+    Constaté le 14/09/2026 : « Que vaut la dérivée de f(x) = 3x² ? » rendu
+    comme vraie question d'un quiz sur les suites numériques. L'exemple est
+    désormais étranger au domaine — une capitale — et repéré ici s'il
+    revient. On compare au texte exact : un cours de géographie qui parlerait
+    vraiment de Dakar poserait sa question autrement.
+    """
+
+    enonce = (item.get("question") or item.get("statement") or "").strip()
+    return enonce in (_EXEMPLE_QUESTION, _EXEMPLE_ENONCE)
 
 
 def _chaines(valeur) -> List[str]:
@@ -1626,13 +1650,16 @@ class CourseGenerator:
                 "progressive. Une explication courte par question (pourquoi "
                 "c'est la bonne réponse, en renvoyant au cours)." + _FORMULES
                 + " Réponds EXACTEMENT dans ce format, sans JSON, en "
-                "reprenant les lignes « ### » telles quelles :\n"
-                "### QUESTION\nQue vaut la dérivée de f(x) = 3x² ?\n"
-                "- A) 3x\n- B) 6x\n- C) x²\n- D) 6\n"
-                "### RÉPONSE B\n"
-                "### EXPLICATION\nOn multiplie par l'exposant puis on le "
-                "diminue de un.\n"
-                "### QUESTION\n…et ainsi de suite, une question par bloc."
+                "reprenant les lignes « ### » telles quelles. L'exemple "
+                "ci-dessous ne montre QUE la mise en forme : son contenu est "
+                "étranger au cours et ne doit jamais apparaître dans ta "
+                "réponse.\n"
+                "### QUESTION\n" + _EXEMPLE_QUESTION + "\n"
+                "- A) Dakar\n- B) Thiès\n- C) Saint-Louis\n- D) Ziguinchor\n"
+                "### RÉPONSE A\n"
+                "### EXPLICATION\nC'est la capitale du Sénégal.\n"
+                "### QUESTION\n…et ainsi de suite, une question par bloc, "
+                "sur LE COURS ci-dessous et rien d'autre."
             )
         else:
             demand = (
@@ -1641,13 +1668,17 @@ class CourseGenerator:
                 "CORRIGÉ pas à pas. Les exercices ne mobilisent que ce que le "
                 "cours enseigne." + _FORMULES
                 + " Réponds EXACTEMENT dans ce format, sans JSON, en "
-                "reprenant les lignes « ### » telles quelles :\n"
+                "reprenant les lignes « ### » telles quelles. L'exemple "
+                "ci-dessous ne montre QUE la mise en forme : son contenu est "
+                "étranger au cours et ne doit jamais apparaître dans ta "
+                "réponse.\n"
                 "### EXERCICE (facile)\n"
-                "Calculer la dérivée de f(x) = 3x² + 2.\n"
+                "" + _EXEMPLE_ENONCE + "\n"
                 "### CORRIGÉ\n"
-                "On dérive terme à terme : f'(x) = 6x.\n"
+                "" + _EXEMPLE_CORRIGE + "\n"
                 "### EXERCICE (moyen)\n"
-                "…et ainsi de suite, un exercice par bloc."
+                "…et ainsi de suite, un exercice par bloc, sur LE COURS "
+                "ci-dessous et rien d'autre."
             )
 
         messages = [
@@ -1777,7 +1808,7 @@ class CourseGenerator:
 
         lire = lire_quiz if kind == "quiz" else lire_exercices
         balise = _BALISE_QUESTION if kind == "quiz" else _BALISE_EXERCICE
-        items = lire(texte)
+        items = [x for x in lire(texte) if not _vient_de_l_exemple(x)]
         if items:
             # Une balise sans son corps — un exercice sans corrigé, une
             # question à trois propositions — est ignorée par le lecteur.

@@ -766,7 +766,27 @@ def test_une_marque_a_remplir_recopiee_n_est_pas_du_contenu():
     assert draft.exercises[0]["solution"] == "On applique la relation."
     # La consigne montre un exercice complet, pas des marques à remplir.
     consigne = llm.exchanges[0][0]["content"]
-    assert "<énoncé>" not in consigne and "3x² + 2" in consigne
+    assert "<énoncé>" not in consigne and "capitale du Sénégal" in consigne
+
+
+def test_l_exemple_de_mise_en_forme_ne_devient_pas_une_question():
+    # Constaté le 14/09/2026 : « Que vaut la dérivée de f(x) = 3x² ? » —
+    # l'exemple de la consigne — rendu comme vraie question d'un quiz sur
+    # les suites numériques. L'exemple est désormais étranger au domaine, et
+    # retiré s'il revient quand même.
+    reponse = ("### QUESTION\nQuelle est la capitale du Sénégal ?\n"
+               "- A) Dakar\n- B) Thiès\n- C) Saint-Louis\n- D) Ziguinchor\n"
+               "### RÉPONSE A\n"
+               "### QUESTION\nQue vaut la limite de $(u_n)$ ?\n"
+               "- A) 0\n- B) 4\n- C) 2\n- D) 1\n### RÉPONSE B")
+    llm = ScriptedLlm([reponse])
+
+    draft = asyncio.run(_generator(llm).generate_blocks(
+        kind="quiz", text="Cours court.", scope=SCOPE, count=1))
+
+    assert [q["question"] for q in draft.quiz] == ["Que vaut la limite de $(u_n)$ ?"]
+    # Et la consigne prévient que l'exemple est étranger au cours.
+    assert "ne doit jamais apparaître" in llm.exchanges[0][0]["content"]
 
 
 def test_un_quiz_balise_rend_ses_quatre_choix_et_sa_reponse():
