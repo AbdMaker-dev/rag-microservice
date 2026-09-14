@@ -288,7 +288,24 @@ _CONTROLES_RESTANTS = re.compile(r"[\x00-\x09\x0b-\x1f](?=[A-Za-z])")
 
 def _reparer_controles(texte: str) -> Tuple[str, int]:
     """Rendre à un texte les commandes LaTeX qu'un caractère de contrôle a
-    mangées. Renvoie le texte et le nombre de contrôles restants."""
+    mangées. Renvoie le texte et le nombre de contrôles restants.
+
+    La réparation ne consulte AUCUNE liste de commandes, et c'est le fond de
+    l'affaire : la première version en tenait une, et `\\boxed` n'y était pas
+    — mesuré le 14/09/2026 sur des exercices fraîchement régénérés, dix
+    occurrences laissées abîmées. Une liste blanche de commandes LaTeX ne
+    sera jamais complète, et chaque trou rend du texte faux en silence.
+
+    Il n'y a rien à deviner : un retour arrière NE PEUT venir que de « \\b »,
+    un saut de page que de « \\f ». On remet le backslash et la lettre, la
+    suite du mot se rétablit d'elle-même, quelle que soit la commande. Ces
+    trois caractères n'ont aucun usage légitime dans un texte de cours.
+
+    La TABULATION est le cas à part : elle sépare légitimement les colonnes
+    d'un tableau écrit à la main. Elle n'est rendue que si le mot qu'elle
+    forme est une commande connue — « \\text », « \\times », « \\theta ». Là,
+    une liste est le bon outil : elle ne décide que d'un cas ambigu.
+    """
 
     if not any(c in texte for c in _CONTROLES_A_REPARER):
         return texte, len(_CONTROLES_RESTANTS.findall(texte))
@@ -297,27 +314,21 @@ def _reparer_controles(texte: str) -> Tuple[str, int]:
     while index < len(texte):
         char = texte[index]
         lettre = _CONTROLE_VERS_LETTRE.get(char)
-        if lettre is None:
-            out.append(char)
-            index += 1
-            continue
         suite = texte[index + 1 :]
-        commande = next(
-            (
-                nom
-                for nom in _LATEX_TRIEES
-                if nom[0] == lettre
-                and suite.startswith(nom[1:])
-                and not suite[len(nom) - 1 : len(nom)].isalpha()
-            ),
-            None,
-        )
-        if commande is None:
+        if lettre is None or not suite[:1].isalpha():
             out.append(char)
             index += 1
             continue
-        out.append("\\" + commande)
-        index += len(commande)
+        if char == "\t" and not any(
+            suite.startswith(nom[1:]) and not suite[len(nom) - 1 : len(nom)].isalpha()
+            for nom in _LATEX_TRIEES
+            if nom[0] == "t"
+        ):
+            out.append(char)
+            index += 1
+            continue
+        out.append("\\" + lettre)
+        index += 1
     repare = "".join(out)
     return repare, len(_CONTROLES_RESTANTS.findall(repare))
 

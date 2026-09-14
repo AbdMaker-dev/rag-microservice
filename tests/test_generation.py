@@ -690,15 +690,26 @@ def test_une_tabulation_d_indentation_n_est_pas_signalee():
     assert restants == 0
 
 
-def test_on_ne_devine_pas_une_commande_inconnue():
-    # Un saut de page peut venir de \frac, \forall ou \fbox : si la suite ne
-    # correspond à aucune commande connue, on laisse le texte tel quel. Mieux
-    # vaut un caractère visible qu'une formule que personne n'a écrite.
+def test_une_commande_absente_de_toute_liste_est_rendue_quand_meme():
+    # « \boxed » n'était dans aucune liste : dix occurrences sont restées
+    # abîmées dans des exercices régénérés le 14/09/2026, alors même que la
+    # réparation venait d'être déployée. Il n'y a rien à deviner — un retour
+    # arrière ne peut venir que de « \b ». Aucune liste ne décide ici.
     from app.core.generation import _parse_json_block
 
-    parsed = _parse_json_block('{"a": "texte \x0czzz suite"}')
+    parsed = _parse_json_block('{"a": "donc $\x08oxed{L = 4}$ et \x0cbox{x}"}')
 
-    assert parsed["a"] == "texte \x0czzz suite"
+    assert parsed["a"] == "donc $\\boxed{L = 4}$ et \\fbox{x}"
+
+
+def test_un_controle_isole_reste_visible():
+    # Un contrôle qui ne précède pas une lettre n'a pas mangé de commande :
+    # on n'invente pas de backslash là où il n'y en avait pas.
+    from app.core.generation import _parse_json_block
+
+    parsed = _parse_json_block('{"a": "texte \x0c 3 fin"}')
+
+    assert parsed["a"] == "texte \x0c 3 fin"
 
 
 def test_un_retour_a_la_ligne_reste_un_retour_a_la_ligne():
