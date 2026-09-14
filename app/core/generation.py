@@ -206,6 +206,18 @@ _TONE = (
 )
 
 
+# Les cours de la plateforme écrivent leurs formules en clair — x², u₀, √,
+# ℓ — parce que c'est ce que le professeur a relu et ce que l'élève lit à
+# l'écran. Laisser le modèle passer en LaTeX ouvre une porte qu'on a vue se
+# refermer sur lui : le 14/09/2026, un résumé a glissé de « $(u_n)$ » à
+# « \boldsymbol{ » répété 3 000 caractères durant, jusqu'à épuiser son
+# budget de sortie. Une contre-oblique appelle la suivante.
+_SANS_LATEX = (
+    " N'emploie ni LaTeX ni commande à contre-oblique : écris les formules "
+    "comme le cours les écrit."
+)
+
+
 def _context_line(scope: Scope) -> str:
     """Dire au modèle pour qui il écrit.
 
@@ -331,6 +343,75 @@ def _wants_search(raw: str) -> Optional[Tuple[str, str]]:
 # corrigés. Le reste est pour le cours, à trois caractères par token, la
 # même estimation que le garde-fou de `_chat`.
 _BLOCKS_RESERVED_TOKENS = 3_800
+
+
+# Une queue dégénérée plus longue que ceci n'est plus du texte : c'est le
+# modèle qui tourne en rond. Mesuré le 14/09/2026 sur un résumé de cours —
+# « \boldsymbol{ » répété sur 3 000 caractères, budget de sortie épuisé,
+# JSON tronqué, bloc perdu. Deux tentatives ont rendu MOT POUR MOT la même
+# chose : à température basse, relancer le même prompt ne change rien.
+_REPETITION_PLANCHER = 200
+_MOTIF_MAX = 60
+
+
+def _couper_repetition(text: str) -> str:
+    """Retirer la queue d'un texte qui répète le même motif sans fin.
+
+    On ne devine pas ce qu'est « du bon texte » : on constate qu'un même
+    motif court se répète jusqu'à la fin, et on coupe au début de cette
+    répétition. Un texte sain n'a pas de queue de 200 caractères faite d'un
+    motif de moins de 60 répété — une liste, un tableau, une formule
+    varient toujours un peu.
+    """
+
+    if len(text) < _REPETITION_PLANCHER:
+        return text
+    for taille in range(1, _MOTIF_MAX + 1):
+        motif = text[-taille:]
+        if not motif.strip():
+            continue
+        repetitions = 1
+        position = len(text) - taille
+        while position - taille >= 0 and text[position - taille : position] == motif:
+            repetitions += 1
+            position -= taille
+        if repetitions * taille >= _REPETITION_PLANCHER:
+            return text[:position]
+    return text
+
+
+_RESUME_OUVERT = re.compile(r'"(?:resume|summary)"\s*:\s*"')
+
+
+def _resume_tronque(raw: str) -> str:
+    """Le texte d'un résumé dont le JSON n'a jamais été refermé.
+
+    On lit la chaîne caractère par caractère plutôt qu'avec une expression
+    régulière : il faut respecter les échappements pour ne pas couper au
+    milieu d'un `\\"`, et s'arrêter proprement à la fin du texte reçu.
+    """
+
+    found = _RESUME_OUVERT.search(raw)
+    if not found:
+        return ""
+    out: List[str] = []
+    index = found.end()
+    while index < len(raw):
+        char = raw[index]
+        if char == "\\" and index + 1 < len(raw):
+            suivant = raw[index + 1]
+            out.append({"n": "\n", "t": "\t", '"': '"', "\\": "\\"}.get(suivant, suivant))
+            index += 2
+            continue
+        if char == '"':
+            break
+        out.append(char)
+        index += 1
+    # Une phrase coupée en plein milieu ne sert à personne : on rend ce qui
+    # va jusqu'à la dernière ponctuation forte.
+    texte = "".join(out).strip()
+    fin = max(texte.rfind("."), texte.rfind("!"), texte.rfind("?"))
+    return texte[: fin + 1].strip() if fin > 0 else texte
 
 
 def _blocks_budget_characters(context_tokens: int) -> int:
@@ -1250,7 +1331,8 @@ class CourseGenerator:
                 "Rédige le RÉSUMÉ de ce cours : 10 à 15 lignes, les idées "
                 "essentielles, les définitions et formules clés, dans l'ordre "
                 "du cours, style impersonnel. Rien qui ne soit dans le cours. "
-                'Réponds UNIQUEMENT en JSON : {"resume": "..."}'
+                + _SANS_LATEX
+                + ' Réponds UNIQUEMENT en JSON : {"resume": "..."}'
             )
         elif kind == "quiz":
             demand = (
@@ -1258,7 +1340,7 @@ class CourseGenerator:
                 "cours. Chaque question : exactement 4 propositions, UNE seule "
                 "juste, et la réponse doit se trouver dans le cours. Difficulté "
                 "progressive. Une explication courte par question (pourquoi "
-                "c'est la bonne réponse, en renvoyant au cours). Réponds "
+                "c'est la bonne réponse, en renvoyant au cours)." + _SANS_LATEX + " Réponds "
                 'UNIQUEMENT en JSON : {"questions": [{"question": "...", '
                 '"choix": ["...", "...", "...", "..."], "reponse": 0, '
                 '"explication": "..."}]} — reponse est l\'index (0 à 3) de la '
@@ -1269,7 +1351,7 @@ class CourseGenerator:
                 f"Rédige {count} EXERCICES d'entraînement sur ce cours, de "
                 "difficulté progressive (facile → difficile), chacun avec son "
                 "CORRIGÉ pas à pas. Les exercices ne mobilisent que ce que le "
-                "cours enseigne. Réponds UNIQUEMENT en JSON : "
+                "cours enseigne." + _SANS_LATEX + " Réponds UNIQUEMENT en JSON : "
                 '{"exercices": [{"enonce": "...", "corrige": "...", '
                 '"difficulte": "facile|moyen|difficile"}]}'
             )
@@ -1300,12 +1382,39 @@ class CourseGenerator:
             raw = await self._chat(
                 messages, num_predict=output_tokens, schema=_BLOCK_SCHEMAS.get(kind)
             )
-            parsed = _parse_json_block(raw)
+            coupe = _couper_repetition(raw)
+            if coupe != raw:
+                warnings.append("MODEL_REPETITION_TRIMMED")
+                logger.warning(
+                    "queue répétitive retirée",
+                    extra={"kind": kind, "avant": len(raw), "apres": len(coupe)},
+                )
+            parsed = _parse_json_block(coupe)
+            if parsed is None and kind == "resume":
+                # Un résumé n'a qu'un champ, et c'est du texte : si le JSON
+                # est tronqué, ce qui a été écrit avant la troncature reste
+                # un résumé utilisable. Le prof le relit de toute façon.
+                sauve = _resume_tronque(coupe)
+                if sauve:
+                    warnings.append("BLOCK_JSON_TRUNCATED")
+                    parsed = {"resume": sauve}
             if parsed:
                 break
-            messages.append({"role": "assistant", "content": raw})
+            messages.append({"role": "assistant", "content": raw[:2000]})
+            # Relancer le MÊME prompt rend la MÊME réponse : le modèle est
+            # déterministe à cette température. La relance doit donc changer
+            # la demande, pas la répéter.
             messages.append(
-                {"role": "user", "content": "Réponds uniquement avec le JSON demandé."}
+                {
+                    "role": "user",
+                    "content": (
+                        "Ta réponse n'était pas exploitable. Recommence, plus "
+                        "court, en texte simple : pas de LaTeX, pas de "
+                        "commande à contre-oblique, les formules écrites "
+                        "comme dans le cours. Réponds uniquement avec le "
+                        "JSON demandé."
+                    ),
+                }
             )
         if not parsed:
             raise GenerationFailed(

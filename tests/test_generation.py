@@ -643,6 +643,63 @@ def test_le_decoupage_respecte_les_paragraphes():
     assert _split_course(texte, 5_000) == [texte]
 
 
+def test_une_queue_repetitive_est_coupee_et_le_resume_sauve():
+    # Mesuré le 14/09/2026 : le modèle a glissé en LaTeX puis répété
+    # « \boldsymbol{ » sur 3 000 caractères, épuisant son budget de sortie —
+    # JSON jamais refermé, bloc perdu. Deux tentatives, même réponse au
+    # caractère près.
+    raw = ('{\n  "resume": "Une suite croissante et majorée converge. '
+           'Le théorème des gendarmes encadre la limite.' + "\\\\boldsymbol{" * 300)
+    llm = ScriptedLlm([raw])
+
+    draft = asyncio.run(_generator(llm).generate_blocks(
+        kind="resume", text="Cours court.", scope=SCOPE))
+
+    assert draft.summary == ("Une suite croissante et majorée converge. "
+                             "Le théorème des gendarmes encadre la limite.")
+    assert "MODEL_REPETITION_TRIMMED" in draft.warnings
+    assert "BLOCK_JSON_TRUNCATED" in draft.warnings
+    # Une seule tentative : le texte sauvé suffit, on ne repaie pas le modèle.
+    assert len(llm.exchanges) == 1
+
+
+def test_la_relance_change_la_demande_au_lieu_de_la_repeter():
+    llm = ScriptedLlm(["pas du json", json.dumps({"resume": "Enfin."})])
+
+    draft = asyncio.run(_generator(llm).generate_blocks(
+        kind="resume", text="Cours court.", scope=SCOPE))
+
+    assert draft.summary == "Enfin."
+    relance = llm.exchanges[1][-1]["content"]
+    assert "pas de LaTeX" in relance and "plus court" in relance
+    assert relance != llm.exchanges[0][-1]["content"]
+
+
+def test_les_trois_blocs_interdisent_le_latex():
+    for kind, reply in [
+        ("resume", json.dumps({"resume": "R."})),
+        ("quiz", json.dumps({"questions": [
+            {"question": "Q ?", "choix": ["a", "b", "c", "d"], "reponse": 0,
+             "explication": "…"}]})),
+        ("exercices", json.dumps({"exercices": [
+            {"enonce": "E", "corrige": "C", "difficulte": "moyen"}]})),
+    ]:
+        llm = ScriptedLlm([reply])
+        asyncio.run(_generator(llm).generate_blocks(
+            kind=kind, text="Cours court.", scope=SCOPE))
+        assert "ni LaTeX ni commande à contre-oblique" in llm.exchanges[0][0]["content"], kind
+
+
+def test_un_texte_sain_n_est_jamais_coupe():
+    from app.core.generation import _couper_repetition
+
+    # Une énumération répète sa forme sans jamais répéter le même motif.
+    texte = " ".join(f"Exercice {n} : calculer u_{n}." for n in range(1, 40))
+    assert _couper_repetition(texte) == texte
+    # Un texte court reste intact même s'il bégaie.
+    assert _couper_repetition("ha" * 20) == "ha" * 20
+
+
 def test_un_bloc_de_controle_ne_finit_jamais_dans_le_cours():
     """Le filet : quoi qu'il arrive en amont, la section rendue au
     professeur ne porte pas de JSON de contrôle. Le cours du 01/09 en
