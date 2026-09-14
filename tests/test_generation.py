@@ -729,6 +729,54 @@ def test_un_retour_a_la_ligne_reste_un_retour_a_la_ligne():
     assert parsed["a"] == "première ligne\nne pas confondre"
 
 
+def test_les_blocs_se_demandent_en_texte_balise_pas_en_json():
+    # Mesuré le 14/09/2026 sur les cours d'essai : les sections, écrites en
+    # texte libre, portaient 2 formules cassées sur 27 840 caractères ; les
+    # exercices, écrits en JSON, 50 sur 8 000. Le format était le coupable —
+    # en JSON chaque « \\ » doit être doublé, et un modèle de 7 milliards de
+    # paramètres n'y arrive pas.
+    reponse = ("### EXERCICE (facile)\nCalculer $u_1$ avec \\( u_0 = 2 \\).\n"
+               "### CORRIGÉ\nOn a \\[ u_1 = \\frac{5}{2} \\]\n"
+               "### EXERCICE (difficile)\nMontrer la convergence.\n"
+               "### CORRIGÉ\nCroissante et majorée.")
+    llm = ScriptedLlm([reponse])
+
+    draft = asyncio.run(_generator(llm).generate_blocks(
+        kind="exercices", text="Cours court.", scope=SCOPE, count=5))
+
+    assert [e["difficulty"] for e in draft.exercises] == ["facile", "difficile"]
+    assert draft.exercises[0]["solution"] == "On a \\[ u_1 = \\frac{5}{2} \\]"
+    # La consigne décrit le format, et aucun schéma JSON n'est imposé.
+    assert "### EXERCICE" in llm.exchanges[0][0]["content"]
+    assert llm.schemas == [None]
+
+
+def test_un_quiz_balise_rend_ses_quatre_choix_et_sa_reponse():
+    reponse = ("### QUESTION\nQue vaut la limite ?\n"
+               "- A) 0\n- B) 2\n- C) 4\n- D) $+\\infty$\n"
+               "### RÉPONSE C\n### EXPLICATION\nLe point fixe vérifie $L = 4$.")
+    llm = ScriptedLlm([reponse])
+
+    draft = asyncio.run(_generator(llm).generate_blocks(
+        kind="quiz", text="Cours court.", scope=SCOPE, count=5))
+
+    question = draft.quiz[0]
+    assert question["question"] == "Que vaut la limite ?"
+    assert question["choices"] == ["0", "2", "4", "$+\\infty$"]
+    assert question["answer"] == 2
+    assert question["explanation"] == "Le point fixe vérifie $L = 4$."
+
+
+def test_un_resume_est_rendu_tel_quel_sans_enveloppe():
+    llm = ScriptedLlm(["Une suite croissante et majorée converge."])
+
+    draft = asyncio.run(_generator(llm).generate_blocks(
+        kind="resume", text="Cours court.", scope=SCOPE))
+
+    assert draft.summary == "Une suite croissante et majorée converge."
+    assert draft.warnings == []
+
+
 def test_une_formule_jamais_fermee_fait_redemander_le_bloc():
     # Mesuré le 14/09/2026 sur des exercices de terminale : quatre « \\[ »
     # pour deux « \\] » dans l'un, six pour deux dans l'autre. L'écran rend
@@ -795,15 +843,37 @@ def test_une_queue_repetitive_est_coupee_et_le_resume_sauve():
 
 
 def test_la_relance_change_la_demande_au_lieu_de_la_repeter():
-    llm = ScriptedLlm(["pas du json", json.dumps({"resume": "Enfin."})])
+    # Une réponse sans la moindre balise n'est pas exploitable : on redemande
+    # une fois, en changeant la demande — relancer le même prompt rendrait la
+    # même réponse, le modèle est déterministe à cette température.
+    hors_format = "Voici quelques idées d'exercices, en vrac, sans structure."
+    correct = ("### EXERCICE (facile)\nCalculer $u_1$.\n"
+               "### CORRIGÉ\nOn applique la relation.")
+    llm = ScriptedLlm([hors_format, correct])
 
     draft = asyncio.run(_generator(llm).generate_blocks(
-        kind="resume", text="Cours court.", scope=SCOPE))
+        kind="exercices", text="Cours court.", scope=SCOPE))
 
-    assert draft.summary == "Enfin."
+    assert draft.exercises[0]["statement"] == "Calculer $u_1$."
     relance = llm.exchanges[1][-1]["content"]
-    assert "plus court" in relance and "aucune répétition" in relance
+    assert "format" in relance and "###" in relance
     assert relance != llm.exchanges[0][-1]["content"]
+
+
+def test_un_bloc_en_json_reste_lu_et_signale():
+    # On demande du texte balisé ; un modèle qui rend du JSON quand même
+    # produit un bloc utilisable — le refuser ferait échouer du bon travail.
+    # Mais on le signale : c'est le signe d'une consigne mal suivie.
+    en_json = json.dumps({"exercices": [
+        {"enonce": "Calculer $u_1$.", "corrige": "On applique.",
+         "difficulte": "facile"}]})
+    llm = ScriptedLlm([en_json])
+
+    draft = asyncio.run(_generator(llm).generate_blocks(
+        kind="exercices", text="Cours court.", scope=SCOPE))
+
+    assert draft.exercises[0]["statement"] == "Calculer $u_1$."
+    assert "BLOCK_JSON_FALLBACK" in draft.warnings
 
 
 def test_les_trois_blocs_ecrivent_leurs_formules_comme_le_cours():

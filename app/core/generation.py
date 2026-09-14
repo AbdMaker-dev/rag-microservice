@@ -541,6 +541,109 @@ def _resume_tronque(raw: str) -> str:
     return texte[: fin + 1].strip() if fin > 0 else texte
 
 
+# Les blocs se demandent en TEXTE BALISÉ, pas en JSON — et c'est une mesure,
+# pas une préférence. Relevé le 14/09/2026 sur les cours d'essai :
+#
+#     sections du cours (texte libre)  27 840 caractères   2 formules cassées
+#     exercices (JSON)                  ~8 000 caractères  50 formules cassées
+#
+# La différence n'est pas le modèle ni le sujet : c'est le format. En JSON,
+# chaque « \ » d'une formule doit être doublé, et un modèle de 7 milliards de
+# paramètres n'y arrive pas de façon fiable — il double trop, pas assez, ou
+# laisse le caractère de contrôle brut. Les sections, elles, n'ont jamais eu
+# le problème : elles s'écrivent en texte libre.
+#
+# On demande donc du texte avec des balises de ligne, on le découpe
+# nous-mêmes, et le LaTeX voyage tel quel. Le JSON reste accepté en repli :
+# un modèle qui en rend quand même ne fait pas échouer le bloc.
+_BALISE_EXERCICE = re.compile(
+    r"^###\s*EXERCICE\s*(?:\(([^)]*)\))?\s*$", re.MULTILINE | re.IGNORECASE
+)
+_BALISE_CORRIGE = re.compile(r"^###\s*CORRIG[ÉE]\s*$", re.MULTILINE | re.IGNORECASE)
+_BALISE_QUESTION = re.compile(r"^###\s*QUESTION\s*$", re.MULTILINE | re.IGNORECASE)
+_BALISE_REPONSE = re.compile(
+    r"^###\s*R[ÉE]PONSE\s*:?\s*([ABCD1-4])\s*$", re.MULTILINE | re.IGNORECASE
+)
+_BALISE_EXPLICATION = re.compile(
+    r"^###\s*EXPLICATION\s*$", re.MULTILINE | re.IGNORECASE
+)
+_CHOIX = re.compile(r"^\s*(?:[-*]\s*)?([ABCD])[).]\s*(.+?)\s*$", re.MULTILINE)
+_DIFFICULTES = ("facile", "moyen", "difficile")
+
+
+def _decouper(texte: str, balise: re.Pattern) -> List[Tuple[str, str]]:
+    """Découper un texte sur une balise de ligne.
+
+    Rend (ce que portait la balise, le corps qui la suit) pour chaque
+    occurrence. Ce qui précède la première balise est jeté : c'est le
+    bavardage d'introduction du modèle.
+    """
+
+    trouvees = list(balise.finditer(texte))
+    morceaux: List[Tuple[str, str]] = []
+    for index, found in enumerate(trouvees):
+        fin = trouvees[index + 1].start() if index + 1 < len(trouvees) else len(texte)
+        capture = (found.group(1) or "") if found.re.groups else ""
+        morceaux.append((capture.strip(), texte[found.end() : fin].strip()))
+    return morceaux
+
+
+def lire_exercices(texte: str) -> List[dict]:
+    """Les exercices d'une réponse balisée, énoncé et corrigé séparés."""
+
+    exercices: List[dict] = []
+    for difficulte, corps in _decouper(texte, _BALISE_EXERCICE):
+        parts = _BALISE_CORRIGE.split(corps, maxsplit=1)
+        enonce = parts[0].strip()
+        corrige = parts[1].strip() if len(parts) > 1 else ""
+        if not enonce or not corrige:
+            continue
+        niveau = difficulte.lower().strip()
+        exercices.append(
+            {
+                "statement": enonce,
+                "solution": corrige,
+                "difficulty": niveau if niveau in _DIFFICULTES else "moyen",
+            }
+        )
+    return exercices
+
+
+def lire_quiz(texte: str) -> List[dict]:
+    """Les questions d'une réponse balisée : énoncé, quatre choix, réponse."""
+
+    questions: List[dict] = []
+    for _, corps in _decouper(texte, _BALISE_QUESTION):
+        reponse = _BALISE_REPONSE.search(corps)
+        if not reponse:
+            continue
+        avant = corps[: reponse.start()]
+        choix = [(lettre, texte_choix) for lettre, texte_choix in _CHOIX.findall(avant)]
+        if len(choix) != 4:
+            continue
+        # L'énoncé, c'est ce qui précède le premier choix.
+        premier = _CHOIX.search(avant)
+        enonce = avant[: premier.start()].strip() if premier else ""
+        lettre = reponse.group(1).upper()
+        index = "ABCD".find(lettre) if lettre in "ABCD" else int(lettre) - 1
+        if not enonce or not 0 <= index < 4:
+            continue
+        apres = corps[reponse.end() :]
+        explication = ""
+        parts = _BALISE_EXPLICATION.split(apres, maxsplit=1)
+        if len(parts) > 1:
+            explication = parts[1].strip()
+        questions.append(
+            {
+                "question": enonce,
+                "choices": [texte_choix for _, texte_choix in choix],
+                "answer": index,
+                "explanation": explication,
+            }
+        )
+    return questions
+
+
 def _chaines(valeur) -> List[str]:
     """Tout le texte d'un objet JSON lu, à plat — énoncés, corrigés,
     questions, explications, quelle que soit sa forme."""
@@ -1498,7 +1601,8 @@ class CourseGenerator:
                 "essentielles, les définitions et formules clés, dans l'ordre "
                 "du cours, style impersonnel. Rien qui ne soit dans le cours. "
                 + _FORMULES
-                + ' Réponds UNIQUEMENT en JSON : {"resume": "..."}'
+                + " Réponds avec le résumé SEUL : pas de titre, pas de JSON, "
+                "pas de commentaire avant ou après."
             )
         elif kind == "quiz":
             demand = (
@@ -1506,20 +1610,23 @@ class CourseGenerator:
                 "cours. Chaque question : exactement 4 propositions, UNE seule "
                 "juste, et la réponse doit se trouver dans le cours. Difficulté "
                 "progressive. Une explication courte par question (pourquoi "
-                "c'est la bonne réponse, en renvoyant au cours)." + _FORMULES + " Réponds "
-                'UNIQUEMENT en JSON : {"questions": [{"question": "...", '
-                '"choix": ["...", "...", "...", "..."], "reponse": 0, '
-                '"explication": "..."}]} — reponse est l\'index (0 à 3) de la '
-                "bonne proposition."
+                "c'est la bonne réponse, en renvoyant au cours)." + _FORMULES
+                + " Réponds EXACTEMENT dans ce format, sans JSON :\n"
+                "### QUESTION\n<la question>\n"
+                "- A) <proposition>\n- B) <proposition>\n"
+                "- C) <proposition>\n- D) <proposition>\n"
+                "### RÉPONSE B\n### EXPLICATION\n<pourquoi>\n"
+                "(puis « ### QUESTION » pour la suivante)"
             )
         else:
             demand = (
                 f"Rédige {count} EXERCICES d'entraînement sur ce cours, de "
                 "difficulté progressive (facile → difficile), chacun avec son "
                 "CORRIGÉ pas à pas. Les exercices ne mobilisent que ce que le "
-                "cours enseigne." + _FORMULES + " Réponds UNIQUEMENT en JSON : "
-                '{"exercices": [{"enonce": "...", "corrige": "...", '
-                '"difficulte": "facile|moyen|difficile"}]}'
+                "cours enseigne." + _FORMULES
+                + " Réponds EXACTEMENT dans ce format, sans JSON :\n"
+                "### EXERCICE (facile)\n<énoncé>\n### CORRIGÉ\n<corrigé>\n"
+                "(puis « ### EXERCICE (moyen) » pour le suivant)"
             )
 
         messages = [
@@ -1535,19 +1642,18 @@ class CourseGenerator:
         ]
 
         warnings: List[str] = []
-        parsed = None
-        # Constaté en production : 3 exercices corrigés dépassent 1 200
-        # tokens — le JSON sortait tronqué avant la dernière accolade, donc
-        # illisible. Les blocs à items ont droit à un plafond plus haut.
+        items: List[dict] = []
+        summary = ""
+        # Constaté en production : trois exercices corrigés dépassent 1 200
+        # tokens. Les blocs à items ont droit à un plafond plus haut.
         output_tokens = (
             max(self._settings.generation_output_tokens, 3000)
             if kind in ("exercices", "quiz")
             else None
         )
         for attempt in range(2):
-            raw = await self._chat(
-                messages, num_predict=output_tokens, schema=_BLOCK_SCHEMAS.get(kind)
-            )
+            # Aucun schéma : la réponse est du texte balisé, pas du JSON.
+            raw = await self._chat(messages, num_predict=output_tokens)
             coupe = _couper_repetition(raw)
             if coupe != raw:
                 warnings.append("MODEL_REPETITION_TRIMMED")
@@ -1555,22 +1661,15 @@ class CourseGenerator:
                     "queue répétitive retirée",
                     extra={"kind": kind, "avant": len(raw), "apres": len(coupe)},
                 )
-            parsed = _parse_json_block(coupe)
-            if parsed is None and kind == "resume":
-                # Un résumé n'a qu'un champ, et c'est du texte : si le JSON
-                # est tronqué, ce qui a été écrit avant la troncature reste
-                # un résumé utilisable. Le prof le relit de toute façon.
-                sauve = _resume_tronque(coupe)
-                if sauve:
-                    warnings.append("BLOCK_JSON_TRUNCATED")
-                    parsed = {"resume": sauve}
-            if parsed:
-                # Une formule ouverte et jamais fermée s'affiche en clair :
-                # l'élève lit « \frac{3}{4} » au lieu d'une fraction. On le
-                # constate et on redemande UNE fois — c'est moins cher qu'un
-                # exercice illisible, et le professeur n'a pas à réparer du
-                # LaTeX à la main.
-                bancales = formules_bancales("\n".join(_chaines(parsed)))
+
+            items, summary, signales = self._lire_bloc(kind, coupe)
+            for signal in signales:
+                if signal not in warnings:
+                    warnings.append(signal)
+            if items or summary:
+                bancales = formules_bancales(
+                    summary or "\n".join(_chaines(items))
+                )
                 if bancales and attempt == 0:
                     logger.warning(
                         "formules mal fermées, on redemande",
@@ -1583,20 +1682,21 @@ class CourseGenerator:
                             "content": (
                                 f"{bancales} formule(s) restent ouvertes sans "
                                 "être fermées. Recommence en fermant chaque "
-                                "\\[ par un \\], chaque \\( par un \\), et "
-                                "sans environnement align : une ligne de "
-                                "calcul par bloc. Réponds uniquement avec le "
-                                "JSON demandé."
+                                "\\[ par un \\], chaque \\( par un \\), et sans "
+                                "environnement align : une ligne de calcul "
+                                "par bloc. Garde exactement le même format de "
+                                "réponse."
                             ),
                         }
                     )
-                    parsed = None
+                    items, summary = [], ""
                     continue
                 if bancales:
                     # La seconde tentative n'a pas suffi : on livre, mais on
                     # le DIT. Le professeur relit et l'écran peut prévenir.
                     warnings.append("MALFORMED_FORMULAS")
                 break
+
             messages.append({"role": "assistant", "content": raw[:2000]})
             # Relancer le MÊME prompt rend la MÊME réponse : le modèle est
             # déterministe à cette température. La relance doit donc changer
@@ -1605,79 +1705,122 @@ class CourseGenerator:
                 {
                     "role": "user",
                     "content": (
-                        "Ta réponse n'était pas exploitable. Recommence, "
-                        "plus court et plus simple : des formules brèves, "
-                        "aucune décoration, aucune répétition. Réponds "
-                        "uniquement avec le JSON demandé."
+                        "Ta réponse ne suivait pas le format demandé. "
+                        "Recommence, plus court, en respectant EXACTEMENT les "
+                        "lignes « ### » indiquées, sans rien avant ni après."
                     ),
                 }
             )
-        if not parsed:
-            raise GenerationFailed(
-                f"le modèle n'a pas produit de {kind} exploitable : relancer"
-            )
 
         if kind == "resume":
-            summary = str(parsed.get("resume") or parsed.get("summary") or "").strip()
             if not summary:
                 raise GenerationFailed("le résumé est vide : relancer")
             return BlocksDraft(kind=kind, summary=summary, warnings=warnings)
-
+        if not items:
+            raise GenerationFailed(
+                f"le modèle n'a pas produit de {kind} exploitable : relancer"
+            )
+        if len(items) < count:
+            # Deux choses différentes, deux avertissements : un item REJETÉ
+            # (mal formé, trois propositions au lieu de quatre) n'est pas la
+            # même chose qu'un modèle qui en produit simplement moins que
+            # demandé. Les confondre priverait le professeur de la seule
+            # information qui appelle une action de sa part.
+            warnings.append("BLOCK_FEWER_ITEMS_THAN_ASKED")
         if kind == "quiz":
-            questions: List[dict] = []
-            dropped = 0
+            return BlocksDraft(kind=kind, quiz=items[:count], warnings=warnings)
+        return BlocksDraft(kind=kind, exercises=items[:count], warnings=warnings)
+
+    def _lire_bloc(self, kind: str, texte: str) -> Tuple[List[dict], str, List[str]]:
+        """Lire une réponse de bloc : texte balisé d'abord, JSON en repli.
+
+        Le repli n'est pas de la politesse : un modèle à qui l'on demande du
+        texte rend parfois du JSON quand même, et ce JSON-là est utilisable.
+        Le refuser ferait échouer un bloc correct.
+        """
+
+        if kind == "resume":
+            nettoye = _strip_control_blocks(texte).strip()
+            parsed = _parse_json_block(texte)
+            if parsed and (parsed.get("resume") or parsed.get("summary")):
+                return [], str(parsed.get("resume") or parsed.get("summary")).strip(), []
+            sauve = _resume_tronque(texte)
+            if sauve and len(sauve) > len(nettoye) / 2:
+                # Le modèle a rendu un JSON jamais refermé : ce qui a été
+                # écrit avant la troncature reste un résumé utilisable, et
+                # le professeur doit savoir qu'il a été repêché.
+                return [], sauve, ["BLOCK_JSON_TRUNCATED"]
+            # Un résumé qui commence par une accolade est un JSON raté, pas
+            # un résumé : mieux vaut relancer que livrer du code.
+            return ([], "", []) if nettoye.startswith("{") else ([], nettoye, [])
+
+        lire = lire_quiz if kind == "quiz" else lire_exercices
+        balise = _BALISE_QUESTION if kind == "quiz" else _BALISE_EXERCICE
+        items = lire(texte)
+        if items:
+            # Une balise sans son corps — un exercice sans corrigé, une
+            # question à trois propositions — est ignorée par le lecteur.
+            # On le dit, sinon le professeur croit avoir tout reçu.
+            rejetes = len(balise.findall(texte)) - len(items)
+            return items, "", (["BLOCK_ITEMS_DROPPED"] if rejetes > 0 else [])
+        parsed = _parse_json_block(texte)
+        if not parsed:
+            return [], "", []
+        return self._items_du_json(kind, parsed), "", ["BLOCK_JSON_FALLBACK"]
+
+    @staticmethod
+    def _items_du_json(kind: str, parsed: dict) -> List[dict]:
+        """Le repli : les items d'une réponse JSON, quand le modèle en rend
+        une malgré la consigne."""
+
+        items: List[dict] = []
+        if kind == "quiz":
             for entry in parsed.get("questions") or []:
                 if not isinstance(entry, dict):
-                    dropped += 1
                     continue
-                choices = [str(c).strip() for c in (entry.get("choix") or entry.get("choices") or [])]
-                answer = entry.get("reponse", entry.get("answer"))
+                choices = [
+                    str(c).strip()
+                    for c in (entry.get("choix") or entry.get("choices") or [])
+                ]
                 question = str(entry.get("question", "")).strip()
                 try:
-                    answer = int(answer)
+                    answer = int(entry.get("reponse", entry.get("answer")))
                 except (TypeError, ValueError):
-                    answer = -1
-                # Quatre propositions, une réponse dans la plage : sinon la
-                # question est inutilisable, on la retire et on le dit.
-                if not question or len(choices) != 4 or not (0 <= answer < 4):
-                    dropped += 1
                     continue
-                questions.append(
+                if not question or len(choices) != 4 or not 0 <= answer < 4:
+                    continue
+                items.append(
                     {
                         "question": question,
                         "choices": choices,
                         "answer": answer,
-                        "explanation": str(entry.get("explication") or entry.get("explanation") or "").strip(),
+                        "explanation": str(
+                            entry.get("explication") or entry.get("explanation") or ""
+                        ).strip(),
                     }
                 )
-            if dropped:
-                warnings.append("BLOCK_ITEMS_DROPPED")
-            if not questions:
-                raise GenerationFailed("aucune question de quiz exploitable : relancer")
-            return BlocksDraft(kind=kind, quiz=questions[:count], warnings=warnings)
-
-        exercises: List[dict] = []
-        dropped = 0
+            return items
         for entry in parsed.get("exercices") or parsed.get("exercises") or []:
             if not isinstance(entry, dict):
-                dropped += 1
                 continue
             statement = str(entry.get("enonce") or entry.get("statement") or "").strip()
             solution = str(entry.get("corrige") or entry.get("solution") or "").strip()
-            difficulty = str(entry.get("difficulte") or entry.get("difficulty") or "moyen").strip().lower()
-            if difficulty not in ("facile", "moyen", "difficile"):
-                difficulty = "moyen"
+            difficulty = str(
+                entry.get("difficulte") or entry.get("difficulty") or "moyen"
+            ).strip().lower()
             if not statement or not solution:
-                dropped += 1
                 continue
-            exercises.append(
-                {"statement": statement, "solution": solution, "difficulty": difficulty}
+            items.append(
+                {
+                    "statement": statement,
+                    "solution": solution,
+                    "difficulty": (
+                        difficulty if difficulty in _DIFFICULTES else "moyen"
+                    ),
+                }
             )
-        if dropped:
-            warnings.append("BLOCK_ITEMS_DROPPED")
-        if not exercises:
-            raise GenerationFailed("aucun exercice exploitable : relancer")
-        return BlocksDraft(kind=kind, exercises=exercises[:count], warnings=warnings)
+        return items
+
 
     async def compose_assessment(
         self,

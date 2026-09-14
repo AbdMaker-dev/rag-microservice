@@ -23,12 +23,11 @@ def _gen(replies):
 
 
 def test_le_quiz_sort_structure_avec_quatre_choix():
-    reply = json.dumps({"questions": [
-        {"question": "Forme de l'écriture complexe ?", "choix": ["z'=az+b", "z'=a", "z'=b", "z'=z"],
-         "reponse": 0, "explication": "C'est la définition du cours."},
-    ]})
+    reply = ("### QUESTION\nForme de l'écriture complexe ?\n"
+             "- A) z'=az+b\n- B) z'=a\n- C) z'=b\n- D) z'=z\n"
+             "### RÉPONSE A\n### EXPLICATION\nC'est la définition du cours.")
     draft = asyncio.run(_gen([reply]).generate_blocks(
-        kind="quiz", text=COURS, scope=SCOPE, count=5))
+        kind="quiz", text=COURS, scope=SCOPE, count=1))
     assert draft.kind == "quiz"
     assert draft.quiz[0]["choices"] == ["z'=az+b", "z'=a", "z'=b", "z'=z"]
     assert draft.quiz[0]["answer"] == 0
@@ -36,31 +35,27 @@ def test_le_quiz_sort_structure_avec_quatre_choix():
 
 
 def test_une_question_inutilisable_est_retiree_et_signalee():
-    reply = json.dumps({"questions": [
-        {"question": "Bonne", "choix": ["a", "b", "c", "d"], "reponse": 2},
-        {"question": "Trois choix seulement", "choix": ["a", "b", "c"], "reponse": 0},
-        {"question": "Réponse hors plage", "choix": ["a", "b", "c", "d"], "reponse": 7},
-    ]})
+    reply = ("### QUESTION\nBonne\n- A) a\n- B) b\n- C) c\n- D) d\n### RÉPONSE C\n"
+             "### QUESTION\nTrois choix seulement\n- A) a\n- B) b\n- C) c\n### RÉPONSE A\n"
+             "### QUESTION\nSans réponse indiquée\n- A) a\n- B) b\n- C) c\n- D) d\n")
     draft = asyncio.run(_gen([reply]).generate_blocks(
-        kind="quiz", text=COURS, scope=SCOPE))
+        kind="quiz", text=COURS, scope=SCOPE, count=1))
     assert [q["question"] for q in draft.quiz] == ["Bonne"]
     assert "BLOCK_ITEMS_DROPPED" in draft.warnings
 
 
 def test_les_exercices_portent_leur_corrige():
-    reply = json.dumps({"exercices": [
-        {"enonce": "Déterminer S(A).", "corrige": "On calcule…", "difficulte": "facile"},
-        {"enonce": "Sans corrigé", "corrige": ""},
-    ]})
+    reply = ("### EXERCICE (facile)\nDéterminer S(A).\n### CORRIGÉ\nOn calcule…\n"
+             "### EXERCICE (moyen)\nSans corrigé\n")
     draft = asyncio.run(_gen([reply]).generate_blocks(
-        kind="exercices", text=COURS, scope=SCOPE))
+        kind="exercices", text=COURS, scope=SCOPE, count=1))
     assert len(draft.exercises) == 1
     assert draft.exercises[0]["difficulty"] == "facile"
     assert "BLOCK_ITEMS_DROPPED" in draft.warnings
 
 
 def test_le_resume_est_un_texte():
-    draft = asyncio.run(_gen([json.dumps({"resume": "Les idées clés…"})]).generate_blocks(
+    draft = asyncio.run(_gen(["Les idées clés…"]).generate_blocks(
         kind="resume", text=COURS, scope=SCOPE))
     assert draft.summary == "Les idées clés…"
 
@@ -74,14 +69,14 @@ def test_un_modele_hors_format_est_relance_puis_echoue_clairement():
 def test_le_bloc_ne_cherche_jamais_dans_la_base():
     # La matière première est le cours validé : aucune recherche.
     retriever = FakeRetriever()
-    gen = CourseGenerator(llm=ScriptedLlm([json.dumps({"resume": "ok"})]),
+    gen = CourseGenerator(llm=ScriptedLlm(["ok"]),
                           retriever=retriever, settings=get_settings())
     asyncio.run(gen.generate_blocks(kind="resume", text=COURS, scope=SCOPE))
     assert retriever.calls == []
 
 
 def test_la_consigne_du_prof_et_le_cours_arrivent_au_modele():
-    llm = ScriptedLlm([json.dumps({"resume": "ok"})])
+    llm = ScriptedLlm(["ok"])
     gen = CourseGenerator(llm=llm, retriever=FakeRetriever(), settings=get_settings())
     asyncio.run(gen.generate_blocks(kind="resume", text=COURS, scope=SCOPE,
                                     instruction="insiste sur le centre"))
@@ -100,8 +95,8 @@ def test_la_route_blocks_rend_un_ticket_puis_le_quiz():
 
     app = create_app()
     app.state.jobs = JobStore()
-    app.state.llm = ScriptedLlm([json.dumps({"questions": [
-        {"question": "Q", "choix": ["a", "b", "c", "d"], "reponse": 1, "explication": "e"}]})])
+    app.state.llm = ScriptedLlm(["### QUESTION\nQ\n- A) a\n- B) b\n- C) c\n- D) d\n"
+                                 "### RÉPONSE B\n### EXPLICATION\ne"])
     app.state.retriever = FakeRetriever()
     client = TestClient(app)
     token = {"X-Service-Token": "test-secret-value-of-at-least-32-chars"}
@@ -176,18 +171,21 @@ def test_les_exercices_ont_un_plafond_de_sortie_plus_haut():
     assert llm.predicts[0] >= 3000
 
 
-def test_les_blocs_contraignent_la_sortie_par_un_schema():
-    """Un 7B produit du JSON structurellement invalide sur les longues
-    sorties (constaté : le dernier exercice se ferme trop tôt, la clé
-    suivante flotte dans le tableau). Le schéma le rend impossible."""
+def test_les_blocs_n_imposent_plus_de_schema_json():
+    """Le schéma garantissait un JSON structurellement valide — et c'est
+    précisément ce qui abîmait les formules : en JSON, chaque « \\ » doit
+    être doublé. Mesuré le 14/09/2026 : 50 formules cassées sur 8 000
+    caractères d'exercices en JSON, contre 2 sur 27 840 caractères de
+    sections en texte libre. On demande donc du texte balisé, et le LaTeX
+    voyage tel quel."""
 
-    llm = ScriptedLlm([json.dumps({"exercices": [{"enonce": "e", "corrige": "c",
-                                                 "difficulte": "moyen"}]})])
+    reply = "### EXERCICE (moyen)\ne\n### CORRIGÉ\nc"
+    llm = ScriptedLlm([reply])
     gen = CourseGenerator(llm=llm, retriever=FakeRetriever(), settings=get_settings())
-    asyncio.run(gen.generate_blocks(kind="exercices", text=COURS, scope=SCOPE))
-    schema = llm.schemas[0]
-    assert schema["properties"]["exercices"]["items"]["required"] == [
-        "enonce", "corrige", "difficulte"]
+    draft = asyncio.run(gen.generate_blocks(kind="exercices", text=COURS,
+                                            scope=SCOPE, count=1))
+    assert llm.schemas == [None]
+    assert draft.exercises[0]["statement"] == "e"
 
 
 def test_la_redaction_de_section_reste_en_texte_libre():
