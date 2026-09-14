@@ -868,6 +868,31 @@ def test_un_backslash_en_trop_devant_une_commande_est_retire():
         "\\[ i\\sin\\left(\\frac{\\pi}{6}\\right) \\]")
 
 
+def test_les_trois_blocs_reparent_les_caracteres_abimes():
+    # La réparation vivait dans la lecture du JSON ; le passage au texte
+    # balisé l'avait désactivée sans que rien ne le dise — les mesures
+    # restaient à zéro parce que hors JSON le modèle n'échappe pas. Une
+    # protection qu'on croit en place et qui ne l'est plus est pire que son
+    # absence. Les trois blocs la traversent désormais.
+    exos = ("### EXERCICE (facile)\nCalculer $\x0crac{3}{4}$\n"
+            "### CORRIGÉ\nOn a $\x08oxed{2}$")
+    quiz = ("### QUESTION\nQue vaut $\x0crac{1}{2}$ ?\n"
+            "- A) $\x09heta$\n- B) 0,5\n- C) 2\n- D) 1\n### RÉPONSE B")
+    resume = "La limite vaut $\x0crac{3}{4}$."
+
+    for kind, reponse, attendu in [
+        ("exercices", exos, "\\frac{3}{4}"),
+        ("quiz", quiz, "\\frac{1}{2}"),
+        ("resume", resume, "\\frac{3}{4}"),
+    ]:
+        llm = ScriptedLlm([reponse])
+        draft = asyncio.run(_generator(llm).generate_blocks(
+            kind=kind, text="Cours court.", scope=SCOPE, count=1))
+        produit = (draft.summary or draft.exercises[0]["statement"]
+                   if kind != "quiz" else draft.quiz[0]["question"])
+        assert attendu in produit, kind
+
+
 def test_un_texte_sans_la_moindre_formule_passe_sans_bruit():
     # Français, histoire, anglais : aucune commande, donc aucun contrôle ne
     # se déclenche. Les gardes des formules ne connaissent pas les

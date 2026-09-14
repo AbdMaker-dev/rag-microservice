@@ -1853,6 +1853,21 @@ class CourseGenerator:
         Le refuser ferait échouer un bloc correct.
         """
 
+        # La réparation des caractères de contrôle vivait dans la lecture du
+        # JSON — et le passage au texte balisé l'a donc silencieusement
+        # désactivée pour les trois blocs. Personne ne l'a vu : hors JSON le
+        # modèle n'a pas de raison d'échapper, et les mesures sont restées à
+        # zéro. Une protection qu'on croit en place et qui ne l'est plus est
+        # pire que son absence — on la remet ici, sur le chemin de TOUTES les
+        # lectures. Question d'Alioune, 14/09/2026 : « ce que tu as appliqué
+        # aux exercices, c'est bien appliqué aux quiz aussi ? »
+        texte, restants = _reparer_controles(texte)
+        if restants:
+            logger.warning(
+                "caractères de contrôle non réparables dans un bloc",
+                extra={"kind": kind, "restants": restants},
+            )
+
         if kind == "resume":
             nettoye = _strip_control_blocks(texte).strip()
             parsed = _parse_json_block(texte)
