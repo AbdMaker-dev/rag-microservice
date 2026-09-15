@@ -159,8 +159,13 @@ def test_l_historique_du_fil_revient_dans_la_conversation():
                  {"role": "lawal", "content": "Une flèche qui..."}],
     ))
     conversation = llm.messages_seen[0]
-    assert conversation[1] == {"role": "user", "content": "C'est quoi un vecteur ?"}
-    assert conversation[2] == {"role": "assistant", "content": "Une flèche qui..."}
+    # Un rappel de contexte dans le message de l'élève, pas des tours rejoués :
+    # rejoués, ils faisaient répondre qwen à la question d'avant (15/09/2026).
+    assert [m["role"] for m in conversation] == ["system", "user"]
+    last = conversation[-1]["content"]
+    assert "L'élève a demandé : C'est quoi un vecteur ?" in last
+    assert "Tu as déjà expliqué : Une flèche qui..." in last
+    assert last.index("Rappel de la conversation") < last.index("Et ensuite ?")
 
 
 def test_reponse_hors_format_repetee_finit_en_echec_clair():
@@ -297,6 +302,14 @@ def test_une_reponse_recopiee_du_fil_est_relancee_sur_la_nouvelle_question():
     assert answer.text.startswith("On la reconnaît")
     assert "TUTOR_REPETITION_RETRIED" in answer.warnings
     assert "AUTRE question" in llm.messages_seen[1][-1]["content"]
+
+
+def test_une_longue_reponse_passee_n_est_rappelee_que_par_son_debut():
+    from app.core.tutor import _rappel_du_fil
+
+    rappel = _rappel_du_fil([{"role": "lawal", "content": "x" * 1000}])
+    assert "x" * 300 + "…" in rappel
+    assert "x" * 301 not in rappel
 
 
 def test_une_reponse_differente_n_est_pas_prise_pour_une_repetition():

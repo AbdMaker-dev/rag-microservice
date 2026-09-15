@@ -84,7 +84,7 @@ Règles absolues :
 - Pour EXPLIQUER (reformuler, donner une image, un exemple), tu peux t'appuyer sur tes propres connaissances, sans contredire le cours.
 - Si les extraits ne contiennent pas la réponse : réponds avec tes connaissances, en commençant EXACTEMENT par « Ce n'est pas dans ton cours, mais voici ce que je sais : ».
 - Explique directement, comme un professeur. N'écris jamais « [S1] indique que », « selon l'extrait » ou « le document dit » : place l'étiquette [S1] en fin de phrase, comme une référence.
-- Si l'élève demande POURQUOI : explique d'où ça vient (la raison, la démonstration courte, l'intuition). Ne te contente pas de répéter l'énoncé.
+- Si l'élève demande POURQUOI : explique d'où ça vient. Montre le petit calcul ou le raisonnement qui y mène à partir des formules du cours, étape par étape. Répéter l'énoncé n'est pas une explication.
 - Ne mets une étiquette [S1] que si CET extrait dit vraiment ce que tu écris. Ce qui vient de tes connaissances ne porte aucune étiquette.
 - Termine par une petite question qui vérifie que l'élève a compris : elle va sous « ### VÉRIFICATION », pas dans l'explication.
 -{formules}
@@ -273,10 +273,11 @@ class Tutor:
                 ),
             }
         ]
-        for turn in history:
-            role = "assistant" if turn.get("role") == "lawal" else "user"
-            messages.append({"role": role, "content": str(turn.get("content", ""))})
-        situation = (
+        # L'historique n'est plus rejoué en tours de dialogue : au banc du
+        # 15/09/2026, qwen (7B comme 14B) y voyait SA réponse à continuer, et
+        # répondait encore à la question d'avant. Il arrive comme un rappel
+        # de contexte, résumé, clairement séparé de la question du jour.
+        situation = _rappel_du_fil(history) + (
             f"L'élève lit la section « {section_heading} » du cours.\n\n"
             if section_heading
             else ""
@@ -543,6 +544,33 @@ def _sauver_json(raw: str) -> str:
             return ""
         body = text[start.end():].rstrip('"} \n')
     return body.replace("\\n", "\n").replace('\\"', '"').strip()
+
+
+# Une réponse passée n'est qu'un rappel : son début suffit, et la recopier
+# entière invitait le modèle à la continuer.
+_RAPPEL_MAX = 300
+
+
+def _rappel_du_fil(history: List[dict]) -> str:
+    """Les échanges précédents, en rappel de contexte — jamais en dialogue."""
+
+    lines = []
+    for turn in history:
+        content = " ".join(str(turn.get("content", "")).split())
+        if not content:
+            continue
+        if turn.get("role") == "lawal":
+            short = content if len(content) <= _RAPPEL_MAX else content[:_RAPPEL_MAX] + "…"
+            lines.append(f"- Tu as déjà expliqué : {short}")
+        else:
+            lines.append(f"- L'élève a demandé : {content}")
+    if not lines:
+        return ""
+    return (
+        "Rappel de la conversation (DÉJÀ TRAITÉ, ne le répète pas) :\n"
+        + "\n".join(lines)
+        + "\n\n"
+    )
 
 
 def _sans_compris(text: str) -> str:
