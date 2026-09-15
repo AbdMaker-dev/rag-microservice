@@ -56,7 +56,9 @@ class _Llm:
 
     async def chat(self, messages, **kwargs):
         self.messages_seen.append(messages)
-        return self.replies.pop(0)
+        # Une fois les réponses scriptées épuisées, c'est la RELECTURE qui
+        # parle — et par défaut elle ne trouve rien à redire.
+        return self.replies.pop(0) if self.replies else "### VERDICT\nOK"
 
 
 def test_le_cours_publie_est_consulte_en_premier():
@@ -90,15 +92,22 @@ def test_cours_muet_les_supports_prennent_le_relais():
     assert "NO_PUBLISHED_COURSE_CONTENT" in answer.warnings
 
 
-def test_sans_aucune_source_lawal_est_honnete_sans_modele():
-    llm = _Llm([])  # toute sollicitation du modèle ferait échouer le pop
+def test_sans_aucune_source_lawal_repond_de_memoire_et_le_dit():
+    """Décision d'Alioune (15/09/2026) : si le cours ne contient pas la
+    réponse, Lawal répond avec ses connaissances — mais le dit à l'élève."""
+
+    reply = json.dumps({"reponse": "Ce n'est pas dans ton cours, mais voici ce que je sais : "
+                                   "dans un triangle rectangle, a² + b² = c².",
+                        "verification": "?"})
+    llm = _Llm([reply])
     tutor = Tutor(llm=llm, retriever=_Retriever({}), settings=_settings())
     answer = asyncio.run(tutor.answer(
-        question="Question hors programme", scope=_scope(), course_id="cours-7",
+        question="C'est quoi Pythagore ?", scope=_scope(), course_id="cours-7",
     ))
     assert "INSUFFICIENT_EVIDENCE" in answer.warnings
-    assert "professeur" in answer.text
-    assert llm.messages_seen == []
+    assert "ANSWER_OUTSIDE_COURSE" in answer.warnings
+    assert answer.citations == []
+    assert "Aucun extrait du cours ne couvre" in llm.messages_seen[0][-1]["content"]
 
 
 def test_le_modele_peut_demander_une_recherche_de_plus():
@@ -167,9 +176,12 @@ def test_les_regles_pedagogiques_sont_dans_le_prompt():
     from app.core.tutor import _SYSTEM
 
     assert "JAMAIS la solution" in _SYSTEM
-    assert "demander au professeur" in _SYSTEM
     assert "question qui vérifie" in _SYSTEM
     assert "Adapte ton langage à la classe" in _SYSTEM
+    assert "DERNIÈRE question" in _SYSTEM
+    assert "Le cours fait foi" in _SYSTEM
+    assert "Ce n'est pas dans ton cours, mais voici ce que je sais" in _SYSTEM
+    assert "[S1] indique que" in _SYSTEM  # nommé pour être interdit
 
 
 def test_le_tuteur_est_branche_dans_l_application():
@@ -196,8 +208,8 @@ def test_une_bonne_reponse_en_prose_est_acceptee_apres_une_relance():
     assert "point invariant" in answer.text
     assert "TUTOR_PLAIN_TEXT" in answer.warnings
     assert answer.check == ""
-    # la relance a bien eu lieu : deux appels au modèle
-    assert len(llm.messages_seen) == 2
+    # la relance a bien eu lieu : deux appels pour répondre, un pour relire
+    assert len(llm.messages_seen) == 3
 
 
 def test_deux_objets_json_cote_a_cote_sont_fusionnes():
@@ -260,3 +272,141 @@ def test_la_route_rend_la_reponse_avec_la_source_de_chaque_citation():
     body = response.json()
     assert body["status"] == "done"
     assert [c["source"] for c in body["citations"]] == ["valide", "cahier"]
+
+
+CENTRE = ("Le centre est le point invariant : si \\( a \\neq 1 \\), "
+          "\\[ \\omega = \\frac{b}{1-a} \\] [S1]")
+
+
+def test_une_reponse_recopiee_du_fil_est_relancee_sur_la_nouvelle_question():
+    """Constaté le 15/09/2026 : à « comment reconnaît-on une similitude
+    directe ? », Lawal a recopié sa réponse précédente sur le centre."""
+
+    retriever = _Retriever({"cours-publie": [_passage()]})
+    copie = json.dumps({"reponse": CENTRE + " Par exemple z' = (1+i)z + 3.", "verification": "?"})
+    nouvelle = json.dumps({"reponse": "On la reconnaît à la forme z' = az + b, avec a non nul [S1].",
+                           "verification": "?"})
+    llm = _Llm([copie, nouvelle])
+    tutor = Tutor(llm=llm, retriever=retriever, settings=_settings())
+    answer = asyncio.run(tutor.answer(
+        question="Comment reconnaît-on une similitude directe ?", scope=_scope(),
+        course_id="cours-7",
+        history=[{"role": "eleve", "content": "Le centre ?"}, {"role": "lawal", "content": CENTRE}],
+    ))
+    assert answer.text.startswith("On la reconnaît")
+    assert "TUTOR_REPETITION_RETRIED" in answer.warnings
+    assert "AUTRE question" in llm.messages_seen[1][-1]["content"]
+
+
+def test_une_reponse_differente_n_est_pas_prise_pour_une_repetition():
+    retriever = _Retriever({"cours-publie": [_passage()]})
+    llm = _Llm([json.dumps({"reponse": "L'angle est l'argument de a [S1].", "verification": "?"})])
+    tutor = Tutor(llm=llm, retriever=retriever, settings=_settings())
+    answer = asyncio.run(tutor.answer(
+        question="Et l'angle ?", scope=_scope(), course_id="cours-7",
+        history=[{"role": "eleve", "content": "Le centre ?"}, {"role": "lawal", "content": CENTRE}],
+    ))
+    assert "TUTOR_REPETITION_RETRIED" not in answer.warnings
+    assert len(llm.messages_seen) == 2  # une réponse, une relecture
+
+
+def test_la_question_arrive_apres_les_extraits():
+    retriever = _Retriever({"cours-publie": [_passage()]})
+    llm = _Llm([json.dumps({"reponse": "Ici [S1].", "verification": "?"})])
+    tutor = Tutor(llm=llm, retriever=retriever, settings=_settings())
+    asyncio.run(tutor.answer(question="C'est quoi la norme ?", scope=_scope(), course_id="cours-7"))
+    last = llm.messages_seen[0][-1]["content"]
+    assert last.index("Extraits validés") < last.index("C'est quoi la norme ?")
+    assert last.rstrip().endswith("C'est quoi la norme ?")
+
+
+FAUX = "Si elle n'est pas une translation (c'est-à-dire |a| = 1), son centre est b/(1-a) [S1]."
+JUSTE = "Si elle n'est pas une translation (c'est-à-dire a ≠ 1), son centre est b/(1-a) [S1]."
+
+
+def test_la_relecture_corrige_une_erreur_qu_elle_nomme():
+    """Constaté le 15/09/2026 : « |a| = 1 » là où le cours dit a ≠ 1."""
+
+    retriever = _Retriever({"cours-publie": [_passage()]})
+    relecture = ("### VERDICT\nERREUR\n### ERREUR\n« |a| = 1 » est faux : [S1] dit a ≠ 1.\n"
+                 "### RÉPONSE CORRIGÉE\n" + JUSTE)
+    llm = _Llm([json.dumps({"reponse": FAUX, "verification": "?"}), relecture])
+    tutor = Tutor(llm=llm, retriever=retriever, settings=_settings())
+    answer = asyncio.run(tutor.answer(question="Le centre ?", scope=_scope(), course_id="cours-7"))
+    assert answer.text == JUSTE
+    assert "TUTOR_ANSWER_REVISED" in answer.warnings
+    assert FAUX in llm.messages_seen[1][-1]["content"]
+
+
+def test_une_correction_sans_erreur_nommee_est_ignoree():
+    # Un petit modèle peut « corriger » ce qui était juste : sans erreur
+    # argumentée, la réponse d'origine reste.
+    retriever = _Retriever({"cours-publie": [_passage()]})
+    relecture = "### VERDICT\nERREUR\n### ERREUR\n\n### RÉPONSE CORRIGÉE\nAutre chose, bien plus longue que prévu."
+    llm = _Llm([json.dumps({"reponse": JUSTE, "verification": "?"}), relecture])
+    tutor = Tutor(llm=llm, retriever=retriever, settings=_settings())
+    answer = asyncio.run(tutor.answer(question="Le centre ?", scope=_scope(), course_id="cours-7"))
+    assert answer.text == JUSTE
+    assert "TUTOR_ANSWER_REVISED" not in answer.warnings
+
+
+def test_une_relecture_en_panne_laisse_la_reponse():
+    retriever = _Retriever({"cours-publie": [_passage()]})
+
+    class _Panne(_Llm):
+        async def chat(self, messages, **kwargs):
+            self.messages_seen.append(messages)
+            if len(self.messages_seen) == 2:
+                raise RuntimeError("ollama injoignable")
+            return self.replies.pop(0)
+
+    llm = _Panne([json.dumps({"reponse": JUSTE, "verification": "?"})])
+    tutor = Tutor(llm=llm, retriever=retriever, settings=_settings())
+    answer = asyncio.run(tutor.answer(question="Le centre ?", scope=_scope(), course_id="cours-7"))
+    assert answer.text == JUSTE
+    assert "TUTOR_REVIEW_FAILED" in answer.warnings
+
+
+def test_le_compris_final_ne_doublonne_pas_la_verification():
+    retriever = _Retriever({"cours-publie": [_passage()]})
+    llm = _Llm([json.dumps({"reponse": JUSTE + "\n\nCompris ?", "verification": "Et si a = 1 ?"})])
+    tutor = Tutor(llm=llm, retriever=retriever, settings=_settings())
+    answer = asyncio.run(tutor.answer(question="Le centre ?", scope=_scope(), course_id="cours-7"))
+    assert answer.text == JUSTE
+
+
+def test_la_reponse_balisee_est_lue_avec_ses_formules():
+    """Le format balisé remplace le JSON : les formules y passent telles quelles."""
+
+    retriever = _Retriever({"cours-publie": [_passage()]})
+    raw = ("### RÉPONSE\nLe module de \\( 3+4i \\) vaut \\[ \\sqrt{3^2+4^2} = 5 \\] [S1]\n"
+           "### VÉRIFICATION\nEt celui de \\( 12-5i \\) ?\n### NOTIONS\nmodule, affixe")
+    tutor = Tutor(llm=_Llm([raw]), retriever=retriever, settings=_settings())
+    answer = asyncio.run(tutor.answer(question="Le module ?", scope=_scope(), course_id="cours-7"))
+    assert answer.text == "Le module de \\( 3+4i \\) vaut \\[ \\sqrt{3^2+4^2} = 5 \\] [S1]"
+    assert answer.check == "Et celui de \\( 12-5i \\) ?"
+    assert answer.concepts == ["module", "affixe"]
+    assert "TUTOR_PLAIN_TEXT" not in answer.warnings
+
+
+def test_un_json_casse_n_arrive_jamais_brut_chez_l_eleve():
+    """Vu au banc du 15/09/2026 (« Pourquoi i² = -1 ? ») : deux objets aux
+    échappements invalides, et l'élève recevait {"reponse": …} tel quel."""
+
+    retriever = _Retriever({"cours-publie": [_passage()]})
+    casse = ('{"reponse": "Comme \\(i = \\cos \\frac{\\pi}{2}\\), on a \\(i^2 = -1\\).\n\nQuelle est '
+             'la signification ?"}\n\n{"verification": "Et -1 ?", "conceptes": ["argument"]}')
+    tutor = Tutor(llm=_Llm([casse, casse]), retriever=retriever, settings=_settings())
+    answer = asyncio.run(tutor.answer(question="Pourquoi i² = -1 ?", scope=_scope(), course_id="cours-7"))
+    assert not answer.text.lstrip().startswith("{")
+    assert '"reponse"' not in answer.text
+    assert "i^2 = -1" in answer.text
+
+
+def test_un_json_coupe_par_la_limite_n_arrive_jamais_brut():
+    from app.core.tutor import _sauver_json
+
+    coupe = '{"reponse": "Pour montrer que la suite est croissante, on étudie le signe de u_{n+1} - u_n.", "verification": "Quelle est l\'étape'
+    assert _sauver_json(coupe) == "Pour montrer que la suite est croissante, on étudie le signe de u_{n+1} - u_n."
+    tronque = '{"reponse": "Pour montrer que la suite est croissante, on étudie le signe'
+    assert _sauver_json(tronque) == "Pour montrer que la suite est croissante, on étudie le signe"

@@ -23,11 +23,14 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 from typing import List, Optional
 
 from app.config import Settings
 from app.core.generation import (
+    _FORMULES,
     _context_line,
     _parse_json_block,
     _render_passages,
@@ -71,20 +74,31 @@ _SYSTEM = """Tu es Lawal, le tuteur de la plateforme LawalSchool. Tu aides un é
 {contexte}
 
 Règles absolues :
+- Réponds à la DERNIÈRE question de l'élève, précisément. Les échanges précédents ne servent que de contexte : ne répète jamais une explication que tu as déjà donnée.
 - Sois professionnel et mature, comme un enseignant expérimenté : bienveillant mais rigoureux, jamais familier, jamais approximatif.
 - Avant de répondre, assure-toi d'avoir assez d'éléments : demande autant de recherches que nécessaire plutôt que de répondre avec des extraits insuffisants.
 - Adapte ton langage à la classe de l'élève : phrases courtes pour les petits, vocabulaire précis pour les grands.
 - Structure : l'idée en une phrase, puis l'explication pas à pas, puis UN exemple concret. Reste court.
 - Si la question est un exercice à résoudre : n'en donne JAMAIS la solution. Explique la méthode, donne un indice, laisse l'élève faire.
-- Appuie-toi UNIQUEMENT sur les extraits fournis. Cite-les par leur étiquette [S1], [S2]…
-- Si les extraits ne suffisent pas pour répondre : dis-le simplement et conseille de demander au professeur. N'invente rien.
-- Termine par une petite question qui vérifie que l'élève a compris.
+- Le cours fait foi : les définitions, formules, notations et méthodes viennent des extraits fournis, jamais de ta mémoire. Relis chaque formule contre l'extrait avant de l'écrire.
+- Pour EXPLIQUER (reformuler, donner une image, un exemple), tu peux t'appuyer sur tes propres connaissances, sans contredire le cours.
+- Si les extraits ne contiennent pas la réponse : réponds avec tes connaissances, en commençant EXACTEMENT par « Ce n'est pas dans ton cours, mais voici ce que je sais : ».
+- Explique directement, comme un professeur. N'écris jamais « [S1] indique que », « selon l'extrait » ou « le document dit » : place l'étiquette [S1] en fin de phrase, comme une référence.
+- Si l'élève demande POURQUOI : explique d'où ça vient (la raison, la démonstration courte, l'intuition). Ne te contente pas de répéter l'énoncé.
+- Ne mets une étiquette [S1] que si CET extrait dit vraiment ce que tu écris. Ce qui vient de tes connaissances ne porte aucune étiquette.
+- Termine par une petite question qui vérifie que l'élève a compris : elle va sous « ### VÉRIFICATION », pas dans l'explication.
+-{formules}
 
 Pour chercher dans les documents, réponds SEULEMENT :
 {{"chercher": {{"question": "...", "nature": "cours-publie|support-cours|programme-officiel"}}}}
 
-Pour répondre à l'élève, réponds SEULEMENT ce JSON :
-{{"reponse": "l'explication, avec les étiquettes [S1]…", "verification": "la petite question finale", "conceptes": ["notion1", "notion2"]}}"""
+Pour répondre à l'élève, écris SEULEMENT, dans ce format (jamais de JSON pour la réponse) :
+### RÉPONSE
+l'explication, avec les étiquettes [S1]…
+### VÉRIFICATION
+la petite question finale
+### NOTIONS
+notion1, notion2"""
 
 
 class Tutor:
@@ -228,19 +242,14 @@ class Tutor:
             # les supports. On les consulte d'office si le cours se tait.
             await search(probe, "support-cours", from_model=False)
 
-        if not passages:
-            # Rien de validé ne couvre la question : réponse honnête, sans
-            # modèle — un modèle sans extraits inventerait.
+        if not passages and notebook_document_id:
+            # Question sur SES notes, et ses notes n'en parlent pas : lui
+            # répondre de mémoire lui ferait croire que c'est dans son cahier.
             return TutorAnswer(
                 text=(
                     "Je n'ai pas trouvé de quoi répondre dans les notes que "
                     "tu as ajoutées. Vérifie que la page que tu cherches est "
                     "bien dans ce cours — et si c'est un mot précis, essaie "
-                    "de me le demander autrement."
-                    if notebook_document_id
-                    else "Je n'ai pas trouvé de quoi répondre dans ton cours "
-                    "ni dans les documents de ton professeur. Pose-lui la "
-                    "question en classe — et si c'est un mot précis, essaie "
                     "de me le demander autrement."
                 ),
                 check="",
@@ -249,32 +258,50 @@ class Tutor:
                 queries=queries,
                 warnings=warnings + ["INSUFFICIENT_EVIDENCE"],
             )
+        if not passages:
+            # Rien de validé ne couvre la question. Décision d'Alioune
+            # (15/09/2026) : Lawal répond quand même avec ses connaissances,
+            # mais le DIT à l'élève — la règle est dans le prompt.
+            warnings.append("INSUFFICIENT_EVIDENCE")
 
+        history = history or []
         messages = [
             {
                 "role": "system",
-                "content": _SYSTEM.format(contexte=_context_line(scope)),
+                "content": _SYSTEM.format(
+                    contexte=_context_line(scope), formules=_FORMULES
+                ),
             }
         ]
-        for turn in history or []:
+        for turn in history:
             role = "assistant" if turn.get("role") == "lawal" else "user"
             messages.append({"role": role, "content": str(turn.get("content", ""))})
         situation = (
-            f"L'élève lit la section « {section_heading} » du cours.\n"
+            f"L'élève lit la section « {section_heading} » du cours.\n\n"
             if section_heading
             else ""
         )
+        # La question vient APRÈS les extraits, au plus près de ce que le
+        # modèle écrit : constaté le 15/09/2026, noyée entre l'historique et
+        # les extraits, elle laissait qwen recopier sa réponse précédente.
         messages.append(
             {
                 "role": "user",
                 "content": (
                     situation
-                    + f"Question de l'élève : {question}\n\n"
-                    "Extraits validés :\n\n"
-                    + _render_passages(passages, "S", 1)
+                    + (
+                        "Extraits validés :\n\n" + _render_passages(passages, "S", 1)
+                        if passages
+                        else "Aucun extrait du cours ne couvre cette question."
+                    )
+                    + f"\n\nQuestion de l'élève, celle à laquelle tu réponds : {question}"
                 ),
             }
         )
+        previous_answers = [
+            str(turn.get("content", "")) for turn in history if turn.get("role") == "lawal"
+        ]
+        repetition_reminded = False
 
         format_reminded = False
         for _ in range(self._settings.answer_max_queries + 1):
@@ -297,14 +324,46 @@ class Tutor:
                     }
                 )
                 continue
-            parsed = _parse_json_block(raw)
+            # Le format balisé d'abord : constaté au banc du 15/09/2026, le
+            # JSON cassait sur les réponses longues à formules (2 sur 8) et
+            # l'élève voyait les accolades. Le JSON reste lu, par tolérance.
+            parsed = _lire_reponse(raw) or _parse_json_block(raw)
             if not (parsed and str(parsed.get("reponse", "")).strip()):
                 # qwen émet parfois {"reponse":…} PUIS {"verification":…} :
                 # deux objets côte à côte — on les fusionne avant d'abandonner.
                 parsed = _merge_json_blocks(raw)
             if parsed and str(parsed.get("reponse", "")).strip():
+                text = _sans_compris(str(parsed["reponse"]).strip())
+                if not repetition_reminded and _repete(text, previous_answers):
+                    # Constaté le 15/09/2026 : à « comment reconnaît-on une
+                    # similitude ? », qwen a recopié sa réponse sur le centre.
+                    # Une relance ciblée ; la seconde réponse est gardée.
+                    repetition_reminded = True
+                    warnings.append("TUTOR_REPETITION_RETRIED")
+                    messages.append({"role": "assistant", "content": raw})
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "Tu viens de répéter ta réponse précédente. "
+                                "L'élève pose une AUTRE question : « "
+                                + question
+                                + " ». Réponds à celle-ci, avec une explication "
+                                "nouvelle, dans le même format."
+                            ),
+                        }
+                    )
+                    continue
+                text = await self._review(
+                    question=question,
+                    text=text,
+                    passages=passages,
+                    warnings=warnings,
+                )
+                if text.startswith("Ce n'est pas dans ton cours"):
+                    warnings.append("ANSWER_OUTSIDE_COURSE")
                 return TutorAnswer(
-                    text=str(parsed["reponse"]).strip(),
+                    text=text,
                     check=str(parsed.get("verification", "")).strip(),
                     concepts=[
                         str(c).strip()
@@ -321,9 +380,12 @@ class Tutor:
             # prose, et l'élève recevait un échec après 4 minutes. Une bonne
             # réponse sans question de vérification vaut mieux que pas de
             # réponse du tout.
-            plain = raw.strip().strip("`").strip()
+            plain = _sauver_json(raw) or raw.strip().strip("`").strip()
             if format_reminded and len(plain) > 80:
                 warnings.append("TUTOR_PLAIN_TEXT")
+                plain = await self._review(
+                    question=question, text=plain, passages=passages, warnings=warnings
+                )
                 return TutorAnswer(
                     text=plain,
                     check="",
@@ -337,7 +399,10 @@ class Tutor:
             messages.append(
                 {
                     "role": "user",
-                    "content": "Réponds uniquement avec le JSON demandé.",
+                    "content": (
+                        "Réponds uniquement dans le format demandé : "
+                        "### RÉPONSE, ### VÉRIFICATION, ### NOTIONS."
+                    ),
                 }
             )
 
@@ -345,6 +410,61 @@ class Tutor:
             "Lawal n'a pas réussi à formuler une réponse : réessaie, ou "
             "pose la question au professeur."
         )
+
+    async def _review(
+        self,
+        *,
+        question: str,
+        text: str,
+        passages: List[Passage],
+        warnings: List[str],
+    ) -> str:
+        """Relire la réponse AVANT que l'élève la voie : répond-elle à la
+        question, chaque formule est-elle celle du cours ?
+
+        Constaté le 15/09/2026 : « si elle n'est pas une translation
+        (c'est-à-dire que |a| = 1) » — faux, et contraire au cours. Un petit
+        modèle se relit mieux qu'il n'écrit. Mais il peut aussi « corriger »
+        ce qui était juste : la correction n'est retenue que s'il NOMME
+        l'erreur, et qu'il rend une réponse complète et différente.
+        Toute panne de la relecture laisse la réponse d'origine.
+        """
+
+        sources = (
+            _render_passages(passages, "S", 1)
+            if passages
+            else "(aucun extrait : la réponse vient des connaissances du tuteur)"
+        )
+        messages = [
+            {"role": "system", "content": _REVIEW_SYSTEM + _FORMULES},
+            {
+                "role": "user",
+                "content": (
+                    f"Extraits du cours :\n\n{sources}\n\n"
+                    f"Question de l'élève : {question}\n\n"
+                    f"Réponse du tuteur :\n{text}"
+                ),
+            },
+        ]
+        try:
+            raw = await self._chat(messages)
+        except Exception:  # noqa: BLE001 — la relecture ne doit jamais coûter la réponse
+            logger.warning("relecture de Lawal impossible", exc_info=True)
+            warnings.append("TUTOR_REVIEW_FAILED")
+            return text
+        verdict = _lire_relecture(raw)
+        if verdict is None:
+            return text
+        error, corrected = verdict
+        if (
+            not error
+            or len(corrected) < 0.4 * len(text)
+            or _normalise(corrected) == _normalise(text)
+        ):
+            return text
+        logger.info("réponse de Lawal corrigée à la relecture", extra={"erreur": error[:300]})
+        warnings.append("TUTOR_ANSWER_REVISED")
+        return _sans_compris(corrected)
 
     async def _chat(self, messages: List[dict]) -> str:
         estimated = sum(len(m["content"]) for m in messages) // 3
@@ -359,6 +479,121 @@ class Tutor:
             num_ctx=self._settings.generation_context_tokens,
             num_predict=self._settings.answer_output_tokens,
         )
+
+
+_REVIEW_SYSTEM = """Tu relis la réponse d'un tuteur à un élève, AVANT qu'il la voie. Tu es exigeant sur deux points seulement :
+1. Répond-elle à LA question posée (et pas à une autre) ?
+2. Chaque définition, formule et condition est-elle exacte et conforme aux extraits du cours ? Vérifie les conditions (≠, =, <), les signes, les modules, les arguments.
+
+Ne touche ni au style, ni à la longueur, ni aux étiquettes [S1]. Si tout est juste, ne change rien.
+
+Réponds dans ce format, sans rien d'autre :
+### VERDICT
+OK ou ERREUR
+### ERREUR
+si ERREUR : la phrase fausse, puis pourquoi, en citant l'extrait qui la contredit
+### RÉPONSE CORRIGÉE
+si ERREUR : la réponse entière, corrigée, à la place de l'ancienne
+"""
+
+_COMPRIS_FINAL = re.compile(r"\s*(?:\n|^)?\s*(?:Compris|C'est clair|D'accord)\s*\?\s*$", re.IGNORECASE)
+
+
+_BALISE = re.compile(r"^\s*#{2,4}\s*(R[ÉE]PONSE|V[ÉE]RIFICATION|NOTIONS)\s*:?\s*$", re.IGNORECASE | re.MULTILINE)
+
+
+def _lire_reponse(raw: str) -> Optional[dict]:
+    """La réponse balisée, sous la même forme que l'ancien JSON — ou None."""
+
+    marks = list(_BALISE.finditer(raw))
+    if not marks:
+        return None
+    parts = {}
+    for index, mark in enumerate(marks):
+        end = marks[index + 1].start() if index + 1 < len(marks) else len(raw)
+        key = mark.group(1).upper().replace("É", "E")
+        parts.setdefault(key, raw[mark.end():end].strip())
+    if not parts.get("REPONSE"):
+        return None
+    notions = [n.strip(" -•\t") for n in re.split(r"[,\n]", parts.get("NOTIONS", ""))]
+    return {
+        "reponse": parts["REPONSE"],
+        "verification": parts.get("VERIFICATION", ""),
+        "conceptes": [n for n in notions if n],
+    }
+
+
+def _sauver_json(raw: str) -> str:
+    """Un JSON cassé ne s'affiche JAMAIS tel quel : on en retire le texte de
+    « reponse ». Vu au banc du 15/09/2026 : l'élève recevait {"reponse": …}."""
+
+    text = raw.strip()
+    if not text.startswith("{"):
+        return ""
+    found = re.search(r'"reponse"\s*:\s*"(.*?)"\s*(?:,\s*"(?:verification|conceptes)"|\}\s*$|\}\s*\{)', text, re.DOTALL)
+    if found:
+        body = found.group(1)
+    else:
+        # Réponse coupée par la limite de sortie : pas de guillemet final.
+        start = re.search(r'"reponse"\s*:\s*"', text)
+        if not start:
+            return ""
+        body = text[start.end():].rstrip('"} \n')
+    return body.replace("\\n", "\n").replace('\\"', '"').strip()
+
+
+def _sans_compris(text: str) -> str:
+    """Le « Compris ? » que qwen ajoute en fin d'explication doublonne la
+    question de vérification, affichée à part."""
+
+    return _COMPRIS_FINAL.sub("", text).strip()
+
+
+def _normalise(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip().lower()
+
+
+def _repete(text: str, previous: List[str]) -> bool:
+    """La réponse recopie-t-elle une réponse déjà donnée dans le fil ?"""
+
+    current = _normalise(text)
+    return any(
+        SequenceMatcher(None, current, _normalise(old)).ratio() >= _REPETITION_RATIO
+        for old in previous
+        if old.strip()
+    )
+
+
+# Mesuré sur les vraies réponses du 15/09/2026, même cours : la réponse
+# « reconnaître » recopiée sur la réponse « centre » → 0,65 ; les réponses
+# « angle » et « centre », réellement différentes → 0,05 et 0,16.
+_REPETITION_RATIO = 0.5
+
+
+def _lire_relecture(raw: str):
+    """(erreur, réponse corrigée) si la relecture signale une erreur
+    argumentée ; ("", "") si elle dit OK ; None si elle est illisible."""
+
+    sections = {}
+    current = None
+    for line in raw.splitlines():
+        heading = re.match(r"^\s*#{2,4}\s*(VERDICT|ERREUR|R[ÉE]PONSE CORRIG[ÉE]E)\s*$", line, re.IGNORECASE)
+        if heading:
+            current = heading.group(1).upper().replace("É", "E")
+            sections[current] = []
+            continue
+        if current:
+            sections[current].append(line)
+    if "VERDICT" not in sections:
+        return None
+    verdict = " ".join(sections["VERDICT"]).strip().upper()
+    if verdict.startswith("OK"):
+        return "", ""
+    if not verdict.startswith("ERREUR"):
+        return None
+    error = "\n".join(sections.get("ERREUR", [])).strip()
+    corrected = "\n".join(sections.get("REPONSE CORRIGEE", [])).strip()
+    return error, corrected
 
 
 def _merge_json_blocks(raw: str) -> dict:
