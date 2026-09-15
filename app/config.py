@@ -79,6 +79,11 @@ class Settings(BaseSettings):
     # tokens de sortie qu'une rédaction de cours — l'élève attend.
     answer_max_queries: int = Field(default=5, ge=1, le=20)
     answer_output_tokens: int = Field(default=700, ge=128, le=4_096)
+    # La relecture des réponses par le modèle lui-même. ÉTEINTE : au banc du
+    # 15/09/2026, qwen2.5:7b a « corrigé » une inégalité juste en une fausse
+    # (suite croissante). Un relecteur moins fiable que l'auteur abîme plus
+    # qu'il ne répare — à rallumer avec un modèle qui se relit mieux.
+    answer_review: bool = False
 
     # --- Synthèse vocale ----------------------------------------------------------
     # La voix choisie à l'oreille par Alioune sur trois échantillons

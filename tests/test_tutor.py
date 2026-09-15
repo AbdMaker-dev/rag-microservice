@@ -16,10 +16,11 @@ from app.core.tutor import Tutor, TutorFailed
 from app.models.schemas import Scope
 
 
-def _settings() -> Settings:
+def _settings(**overrides) -> Settings:
     return Settings(
         service_shared_secret="test-secret-value-of-at-least-32-chars",
         database_url="postgresql://x:y@localhost/z",
+        **overrides,
     )
 
 
@@ -208,8 +209,8 @@ def test_une_bonne_reponse_en_prose_est_acceptee_apres_une_relance():
     assert "point invariant" in answer.text
     assert "TUTOR_PLAIN_TEXT" in answer.warnings
     assert answer.check == ""
-    # la relance a bien eu lieu : deux appels pour répondre, un pour relire
-    assert len(llm.messages_seen) == 3
+    # la relance a bien eu lieu : deux appels au modèle
+    assert len(llm.messages_seen) == 2
 
 
 def test_deux_objets_json_cote_a_cote_sont_fusionnes():
@@ -307,7 +308,7 @@ def test_une_reponse_differente_n_est_pas_prise_pour_une_repetition():
         history=[{"role": "eleve", "content": "Le centre ?"}, {"role": "lawal", "content": CENTRE}],
     ))
     assert "TUTOR_REPETITION_RETRIED" not in answer.warnings
-    assert len(llm.messages_seen) == 2  # une réponse, une relecture
+    assert len(llm.messages_seen) == 1
 
 
 def test_la_question_arrive_apres_les_extraits():
@@ -331,7 +332,7 @@ def test_la_relecture_corrige_une_erreur_qu_elle_nomme():
     relecture = ("### VERDICT\nERREUR\n### ERREUR\n« |a| = 1 » est faux : [S1] dit a ≠ 1.\n"
                  "### RÉPONSE CORRIGÉE\n" + JUSTE)
     llm = _Llm([json.dumps({"reponse": FAUX, "verification": "?"}), relecture])
-    tutor = Tutor(llm=llm, retriever=retriever, settings=_settings())
+    tutor = Tutor(llm=llm, retriever=retriever, settings=_settings(answer_review=True))
     answer = asyncio.run(tutor.answer(question="Le centre ?", scope=_scope(), course_id="cours-7"))
     assert answer.text == JUSTE
     assert "TUTOR_ANSWER_REVISED" in answer.warnings
@@ -344,7 +345,7 @@ def test_une_correction_sans_erreur_nommee_est_ignoree():
     retriever = _Retriever({"cours-publie": [_passage()]})
     relecture = "### VERDICT\nERREUR\n### ERREUR\n\n### RÉPONSE CORRIGÉE\nAutre chose, bien plus longue que prévu."
     llm = _Llm([json.dumps({"reponse": JUSTE, "verification": "?"}), relecture])
-    tutor = Tutor(llm=llm, retriever=retriever, settings=_settings())
+    tutor = Tutor(llm=llm, retriever=retriever, settings=_settings(answer_review=True))
     answer = asyncio.run(tutor.answer(question="Le centre ?", scope=_scope(), course_id="cours-7"))
     assert answer.text == JUSTE
     assert "TUTOR_ANSWER_REVISED" not in answer.warnings
@@ -361,7 +362,7 @@ def test_une_relecture_en_panne_laisse_la_reponse():
             return self.replies.pop(0)
 
     llm = _Panne([json.dumps({"reponse": JUSTE, "verification": "?"})])
-    tutor = Tutor(llm=llm, retriever=retriever, settings=_settings())
+    tutor = Tutor(llm=llm, retriever=retriever, settings=_settings(answer_review=True))
     answer = asyncio.run(tutor.answer(question="Le centre ?", scope=_scope(), course_id="cours-7"))
     assert answer.text == JUSTE
     assert "TUTOR_REVIEW_FAILED" in answer.warnings
@@ -410,3 +411,17 @@ def test_un_json_coupe_par_la_limite_n_arrive_jamais_brut():
     assert _sauver_json(coupe) == "Pour montrer que la suite est croissante, on étudie le signe de u_{n+1} - u_n."
     tronque = '{"reponse": "Pour montrer que la suite est croissante, on étudie le signe'
     assert _sauver_json(tronque) == "Pour montrer que la suite est croissante, on étudie le signe"
+
+
+def test_la_relecture_est_eteinte_par_defaut():
+    """Au banc du 15/09/2026, la relecture par qwen2.5:7b a rendu fausse une
+    réponse juste : elle ne tourne que si on l'allume."""
+
+    retriever = _Retriever({"cours-publie": [_passage()]})
+    relecture = ("### VERDICT\nERREUR\n### ERREUR\nprétendue erreur\n"
+                 "### RÉPONSE CORRIGÉE\nUne version fausse mais bien plus longue que l'originale.")
+    llm = _Llm([json.dumps({"reponse": JUSTE, "verification": "?"}), relecture])
+    tutor = Tutor(llm=llm, retriever=retriever, settings=_settings())
+    answer = asyncio.run(tutor.answer(question="Le centre ?", scope=_scope(), course_id="cours-7"))
+    assert answer.text == JUSTE
+    assert len(llm.messages_seen) == 1

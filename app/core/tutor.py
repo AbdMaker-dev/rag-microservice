@@ -430,6 +430,9 @@ class Tutor:
         Toute panne de la relecture laisse la réponse d'origine.
         """
 
+        if not self._settings.answer_review:
+            return text
+
         sources = (
             _render_passages(passages, "S", 1)
             if passages
