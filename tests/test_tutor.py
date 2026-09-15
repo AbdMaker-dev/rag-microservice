@@ -214,3 +214,49 @@ def test_deux_objets_json_cote_a_cote_sont_fusionnes():
     assert answer.text == "Le centre est le point invariant [S1]."
     assert answer.check == "Sauras-tu le retrouver ?"
     assert "TUTOR_PLAIN_TEXT" not in answer.warnings
+
+
+def test_la_route_rend_la_reponse_avec_la_source_de_chaque_citation():
+    """Constaté en production le 15/09/2026 : chaque citation porte
+    « source » (cahier ou contenu validé), mais le contrat de sortie ne le
+    déclarait pas — GET /answer/{job} répondait 500 sur TOUTE réponse finie,
+    et l'élève attendait Lawal indéfiniment. On passe par la vraie route."""
+
+    import time
+
+    from fastapi.testclient import TestClient
+
+    from app.core.jobs import JobStore
+    from app.core.tutor import TutorAnswer, _citations
+    from app.main import create_app
+
+    class _Tuteur:
+        async def answer(self, **kwargs):
+            return TutorAnswer(
+                text="Le module de a [S1].", check="Et l'argument ?",
+                concepts=["similitude"],
+                citations=_citations([_passage(chunk="c1"), _passage(chunk="n1")], {"n1"}),
+                queries=[], warnings=[],
+            )
+
+    app = create_app()
+    app.state.jobs = JobStore()
+    app.state.tutor = _Tuteur()
+    client = TestClient(app)
+    token = {"X-Service-Token": "test-secret-value-of-at-least-32-chars"}
+    accepted = client.post("/answer", headers=token, json={
+        "requestId": "a-1", "courseId": "cours-7", "question": "Pourquoi ?",
+        "scope": {"country": "SN", "subject": "maths", "level": "secondaire",
+                  "track": "S2", "grade": "terminale", "curriculumVersion": "2006"},
+    })
+    assert accepted.status_code == 202
+    job = accepted.json()["jobId"]
+    for _ in range(50):
+        response = client.get(f"/answer/{job}", headers=token)
+        assert response.status_code == 200, response.text
+        if response.json()["status"] == "done":
+            break
+        time.sleep(0.1)
+    body = response.json()
+    assert body["status"] == "done"
+    assert [c["source"] for c in body["citations"]] == ["valide", "cahier"]

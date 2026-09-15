@@ -828,6 +828,9 @@ class TutorCitation(Wire):
     document_id: str
     title: str
     locator: str
+    # D'où vient l'extrait : le cahier de l'élève ou le contenu validé.
+    # Absent du contrat, il faisait répondre 500 à toute réponse finie.
+    source: Literal["cahier", "valide"] = "valide"
 
 
 class AnswerStatus(Wire):
