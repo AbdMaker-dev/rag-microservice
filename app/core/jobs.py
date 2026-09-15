@@ -56,6 +56,8 @@ class Job:
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
+    # Le moteur IA de la tâche (trace de ce qui a réellement écrit).
+    engine: Optional[object] = None
 
 
 class JobStore:
@@ -70,15 +72,31 @@ class JobStore:
         }
         self._running: Optional[Job] = None
         self._worker: Optional[asyncio.Task] = None
+        self._background: set = set()
 
     # ── soumettre ────────────────────────────────────────────────────────
     def submit(
-        self, work: Callable[[], Awaitable[object]], *, lane: str = "prof"
+        self,
+        work: Callable[[], Awaitable[object]],
+        *,
+        lane: str = "prof",
+        exclusive: bool = True,
     ) -> Job:
         if lane not in self._queues:
             lane = "prof"
         job = Job(id=uuid.uuid4().hex, lane=lane)
         self._jobs[job.id] = job
+        if not exclusive:
+            # Une tâche qui n'occupe pas le processeur (moteur en ligne) part
+            # tout de suite, à côté de la file : rien à attendre, rien à
+            # retarder. Sa durée n'entre pas dans les moyennes de la file.
+            self._prune()
+            task = asyncio.get_running_loop().create_task(
+                self._run(job, work, record=False)
+            )
+            self._background.add(task)
+            task.add_done_callback(self._background.discard)
+            return job
         self._queues[lane].append((job, work))
         self._prune()
         self._ensure_worker()
@@ -144,37 +162,42 @@ class JobStore:
             if entry is None:
                 return
             job, work = entry
-            job.status = "running"
-            job.started_at = datetime.now(timezone.utc)
             self._running = job
             try:
-                job.result = await work()
-                job.status = "done"
-            except Exception as error:  # noqa: BLE001
-                # Le message est montré au professeur : jamais de trace brute.
-                logger.exception("tâche échouée", extra={"job": job.id})
-                job.error = str(error)
-                job.status = "failed"
+                await self._run(job, work, record=True)
             finally:
-                job.finished_at = datetime.now(timezone.utc)
-                if job.started_at is not None:
-                    self._durations[job.lane].append(
+                self._running = None
+
+    async def _run(self, job: Job, work, *, record: bool) -> None:
+        job.status = "running"
+        job.started_at = datetime.now(timezone.utc)
+        try:
+            job.result = await work()
+            job.status = "done"
+        except Exception as error:  # noqa: BLE001
+            # Le message est montré au professeur : jamais de trace brute.
+            logger.exception("tâche échouée", extra={"job": job.id})
+            job.error = str(error)
+            job.status = "failed"
+        finally:
+            job.finished_at = datetime.now(timezone.utc)
+            if record and job.started_at is not None:
+                self._durations[job.lane].append(
+                    (job.finished_at - job.started_at).total_seconds()
+                )
+            logger.info(
+                "tâche terminée",
+                extra={
+                    "job": job.id,
+                    "file": job.lane,
+                    "statut": job.status,
+                    "secondes": int(
                         (job.finished_at - job.started_at).total_seconds()
                     )
-                self._running = None
-                logger.info(
-                    "tâche terminée",
-                    extra={
-                        "job": job.id,
-                        "file": job.lane,
-                        "statut": job.status,
-                        "secondes": int(
-                            (job.finished_at - job.started_at).total_seconds()
-                        )
-                        if job.started_at
-                        else None,
-                    },
-                )
+                    if job.started_at
+                    else None,
+                },
+            )
 
     def _prune(self) -> None:
         finished = [j for j in self._jobs.values() if j.status in ("done", "failed")]

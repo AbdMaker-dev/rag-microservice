@@ -162,7 +162,11 @@ class Tutor:
         history: Optional[List[dict]] = None,
         student_account_id: str = "",
         notebook_document_id: str = "",
+        llm: Optional[LlmProvider] = None,
     ) -> TutorAnswer:
+        # Le moteur de CETTE demande (en ligne ou local) ; par défaut celui
+        # du service.
+        llm = llm or self._llm
         queries: List[dict] = []
         warnings: List[str] = []
         passages: List[Passage] = []
@@ -306,7 +310,7 @@ class Tutor:
 
         format_reminded = False
         for _ in range(self._settings.answer_max_queries + 1):
-            raw = await self._chat(messages)
+            raw = await self._chat(messages, llm)
             wanted = _wants_tutor_search(raw)
             if wanted is not None:
                 asked, role = wanted
@@ -356,6 +360,7 @@ class Tutor:
                     )
                     continue
                 text = await self._review(
+                    llm=llm,
                     question=question,
                     text=text,
                     passages=passages,
@@ -385,7 +390,7 @@ class Tutor:
             if format_reminded and len(plain) > 80:
                 warnings.append("TUTOR_PLAIN_TEXT")
                 plain = await self._review(
-                    question=question, text=plain, passages=passages, warnings=warnings
+                    llm=llm, question=question, text=plain, passages=passages, warnings=warnings
                 )
                 return TutorAnswer(
                     text=plain,
@@ -415,6 +420,7 @@ class Tutor:
     async def _review(
         self,
         *,
+        llm: LlmProvider,
         question: str,
         text: str,
         passages: List[Passage],
@@ -451,7 +457,7 @@ class Tutor:
             },
         ]
         try:
-            raw = await self._chat(messages)
+            raw = await self._chat(messages, llm)
         except Exception:  # noqa: BLE001 — la relecture ne doit jamais coûter la réponse
             logger.warning("relecture de Lawal impossible", exc_info=True)
             warnings.append("TUTOR_REVIEW_FAILED")
@@ -470,14 +476,14 @@ class Tutor:
         warnings.append("TUTOR_ANSWER_REVISED")
         return _sans_compris(corrected)
 
-    async def _chat(self, messages: List[dict]) -> str:
+    async def _chat(self, messages: List[dict], llm: Optional[LlmProvider] = None) -> str:
         estimated = sum(len(m["content"]) for m in messages) // 3
         if estimated > self._settings.generation_context_tokens:
             raise TutorFailed(
                 "la conversation est devenue trop longue : ouvre un nouveau "
                 "fil avec Lawal"
             )
-        return await self._llm.chat(
+        return await (llm or self._llm).chat(
             messages,
             timeout=self._settings.generation_timeout_s,
             num_ctx=self._settings.generation_context_tokens,

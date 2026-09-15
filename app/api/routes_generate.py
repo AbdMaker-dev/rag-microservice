@@ -16,6 +16,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.api.dependencies import require_service_token
+from app.api.engine_support import engine_for, engine_used, submit_traced
 from app.config import Settings, get_settings
 from app.core.proposal import Discussion
 from app.core.generation import (
@@ -59,13 +60,16 @@ async def generate(
     request: Request,
     settings: Settings = Depends(get_settings),
 ) -> GenerateAccepted:
+    engine_llm, trace = engine_for(body, request)
     generator = CourseGenerator(
-        llm=request.app.state.llm,
+        llm=engine_llm,
         retriever=request.app.state.retriever,
         settings=settings,
     )
 
-    job = request.app.state.jobs.submit(
+    job = submit_traced(
+        request,
+        trace,
         lambda: generator.generate(
             instruction=body.instruction,
             scope=body.scope,
@@ -83,6 +87,14 @@ async def generate(
 
 @router.get("/generate/{job_id}", response_model=GenerateStatus)
 async def generation_status(job_id: str, request: Request) -> GenerateStatus:
+    response = await _generation_status(job_id, request)
+    job = request.app.state.jobs.get(job_id)
+    # Le moteur qui a écrit, sur TOUT résultat — jobs locaux compris.
+    response.engine = engine_used(getattr(job, "engine", None))
+    return response
+
+
+async def _generation_status(job_id: str, request: Request) -> GenerateStatus:
     job = request.app.state.jobs.get(job_id)
     if job is None:
         raise HTTPException(
@@ -207,12 +219,15 @@ async def adjust(
     appel rend le cours complet révisé, sections intactes comprises.
     """
 
+    engine_llm, trace = engine_for(body, request)
     generator = CourseGenerator(
-        llm=request.app.state.llm,
+        llm=engine_llm,
         retriever=request.app.state.retriever,
         settings=settings,
     )
-    job = request.app.state.jobs.submit(
+    job = submit_traced(
+        request,
+        trace,
         lambda: generator.adjust(
             title=body.title,
             sections=[section.model_dump() for section in body.sections],
@@ -244,12 +259,15 @@ async def plan(
 ) -> GenerateAccepted:
     """Étape 1 du mode progressif : le plan, discutable, avant tout contenu."""
 
+    engine_llm, trace = engine_for(body, request)
     generator = CourseGenerator(
-        llm=request.app.state.llm,
+        llm=engine_llm,
         retriever=request.app.state.retriever,
         settings=settings,
     )
-    job = request.app.state.jobs.submit(
+    job = submit_traced(
+        request,
+        trace,
         lambda: generator.draft_plan(
             instruction=body.instruction,
             title=body.title,
@@ -282,12 +300,15 @@ async def section(
     moment où il la demande.
     """
 
+    engine_llm, trace = engine_for(body, request)
     generator = CourseGenerator(
-        llm=request.app.state.llm,
+        llm=engine_llm,
         retriever=request.app.state.retriever,
         settings=settings,
     )
-    job = request.app.state.jobs.submit(
+    job = submit_traced(
+        request,
+        trace,
         lambda: generator.write_one_section(
             heading=body.heading,
             description=body.description,
@@ -324,12 +345,15 @@ async def blocks(
     contenu validé. Un appel par bloc ; le prof relit et valide, comme une
     section. Le statut se lit sur GET /generate/{jobId}."""
 
+    engine_llm, trace = engine_for(body, request)
     generator = CourseGenerator(
-        llm=request.app.state.llm,
+        llm=engine_llm,
         retriever=request.app.state.retriever,
         settings=settings,
     )
-    job = request.app.state.jobs.submit(
+    job = submit_traced(
+        request,
+        trace,
         lambda: generator.generate_blocks(
             kind=body.kind,
             text=body.text,
@@ -364,12 +388,15 @@ async def blocks_discuss(
     sur UNE question ou UN exercice : les autres sont rendus mot pour mot.
     """
 
+    engine_llm, trace = engine_for(body, request)
     generator = CourseGenerator(
-        llm=request.app.state.llm,
+        llm=engine_llm,
         retriever=request.app.state.retriever,
         settings=settings,
     )
-    job = request.app.state.jobs.submit(
+    job = submit_traced(
+        request,
+        trace,
         lambda: generator.discuss_block(
             kind=body.kind,
             text=body.text,
@@ -412,12 +439,15 @@ async def assessment(
     relit et valide l'épreuve comme le reste. Statut sur GET /generate/{jobId}.
     """
 
+    engine_llm, trace = engine_for(body, request)
     generator = CourseGenerator(
-        llm=request.app.state.llm,
+        llm=engine_llm,
         retriever=request.app.state.retriever,
         settings=settings,
     )
-    job = request.app.state.jobs.submit(
+    job = submit_traced(
+        request,
+        trace,
         lambda: generator.compose_assessment(
             kind=body.kind,
             sources=[source.model_dump() for source in body.sources],

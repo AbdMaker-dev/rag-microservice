@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
 CONTRACT_VERSION = "1.0"
 
@@ -59,6 +59,47 @@ MediaType = Literal[
     # a cassé le premier appel réel de management (04/09/2026).
     "application/octet-stream",
 ]
+
+
+class EngineChoice(Wire):
+    """Le moteur IA choisi par le super admin pour ce pays et cet usage.
+
+    Envoyé par management avec la demande ; absent = modèle local. La clé
+    est un `SecretStr` : elle ne s'affiche ni dans un journal ni dans une
+    erreur de validation.
+    """
+
+    provider: Literal["local", "claude", "gpt", "gemini"] = "local"
+    model: str = Field(default="", max_length=100)
+    api_key: SecretStr = Field(default=SecretStr(""), max_length=500)
+
+    @model_validator(mode="after")
+    def _online_needs_model_and_key(self):
+        if self.provider != "local":
+            if not self.model.strip():
+                raise ValueError("un moteur en ligne demande un modèle")
+            if len(self.api_key.get_secret_value()) < 10:
+                raise ValueError("un moteur en ligne demande une clé d'API")
+        return self
+
+
+class EngineUsed(Wire):
+    """Ce qui a réellement écrit. `fallback` : le fournisseur en ligne est
+    tombé et le modèle local a pris le relais."""
+
+    provider: str
+    model: str
+    fallback: bool = False
+
+
+class EngineTestRequest(Wire):
+    engine: EngineChoice
+
+
+class EngineTestResponse(Wire):
+    ok: bool
+    latency_ms: int
+    error: Optional[str] = None
 
 
 class ExtractRequest(Wire):
@@ -139,6 +180,8 @@ class NotebookGenerateRequest(Wire):
     text: str = Field(min_length=1)
     scope: Scope
     count: int = Field(default=5, ge=1, le=20)
+    # Moteur IA du pays pour cet usage — absent : modèle local.
+    engine: Optional[EngineChoice] = None
 
 
 class NotebookIndexRequest(Wire):
@@ -318,6 +361,8 @@ class ProposalRequest(Wire):
     # Ce que l'extraction a signalé sur ce passage (`THIN`, `FORMULA`…).
     # Transmis au modèle comme indice, jamais comme instruction.
     issues: List[str] = []
+    # Moteur IA du pays pour cet usage — absent : modèle local.
+    engine: Optional[EngineChoice] = None
 
 
 class ProposalResponse(Wire):
@@ -336,6 +381,7 @@ class ProposalResponse(Wire):
     uncertain: bool = False
     changed_symbols: List[str] = []
     warning: Optional[str] = None
+    engine: Optional[EngineUsed] = None
 
 
 class ProposalTurn(Wire):
@@ -356,6 +402,8 @@ class ProposalChatRequest(Wire):
     text: str = Field(min_length=1, max_length=120_000)
     instruction: str = Field(min_length=1, max_length=2_000)
     history: List[ProposalTurn] = []
+    # Moteur IA du pays pour cet usage — absent : modèle local.
+    engine: Optional[EngineChoice] = None
 
 
 class ProposedEdit(Wire):
@@ -499,6 +547,8 @@ class GenerateRequest(Wire):
     # grounded : rien hors des extraits, les manques sont signalés.
     # enriched : le modèle peut compléter, chaque ajout encadré ⟦AJOUT⟧…⟦/AJOUT⟧.
     strictness: Literal["grounded", "enriched"] = "grounded"
+    # Moteur IA du pays pour cet usage — absent : modèle local.
+    engine: Optional[EngineChoice] = None
 
 
 class AdjustSection(Wire):
@@ -530,6 +580,8 @@ class AdjustRequest(Wire):
     # « comme je t'ai dit, garde un ton simple » ne marcherait pas. Le service
     # les lit et ne les stocke jamais.
     history: List[Dict[str, str]] = Field(default_factory=list, max_length=20)
+    # Moteur IA du pays pour cet usage — absent : modèle local.
+    engine: Optional[EngineChoice] = None
 
 
 class PlanChild(Wire):
@@ -572,6 +624,8 @@ class PlanRequest(Wire):
     current_plan: Optional[Dict[str, Any]] = None
     request: Optional[str] = Field(default=None, max_length=4000)
     history: List[Dict[str, str]] = Field(default_factory=list, max_length=20)
+    # Moteur IA du pays pour cet usage — absent : modèle local.
+    engine: Optional[EngineChoice] = None
 
 
 class SectionRequest(Wire):
@@ -597,6 +651,8 @@ class SectionRequest(Wire):
     current_text: Optional[str] = None
     request: Optional[str] = Field(default=None, max_length=4000)
     history: List[Dict[str, str]] = Field(default_factory=list, max_length=20)
+    # Moteur IA du pays pour cet usage — absent : modèle local.
+    engine: Optional[EngineChoice] = None
 
 
 BlockKind = Literal["resume", "exercices", "quiz"]
@@ -618,6 +674,8 @@ class BlocksRequest(Wire):
     count: int = Field(default=5, ge=1, le=20)
     # Consigne du prof (« insiste sur les similitudes de rapport 1 »).
     instruction: str = Field(default="", max_length=2000)
+    # Moteur IA du pays pour cet usage — absent : modèle local.
+    engine: Optional[EngineChoice] = None
 
 
 class BlocksDiscussRequest(BlocksRequest):
@@ -708,6 +766,8 @@ class AssessmentRequest(Wire):
     total_points: int = Field(default=20, ge=5, le=100)
     exercise_count: int = Field(default=3, ge=1, le=10)
     instruction: str = Field(default="", max_length=2000)
+    # Moteur IA du pays pour cet usage — absent : modèle local.
+    engine: Optional[EngineChoice] = None
 
 
 class AssessmentExercise(Wire):
@@ -776,6 +836,7 @@ class GenerateStatus(Wire):
     rejected: List[RejectedEdit] = []
     warnings: List[str] = []
     error: Optional[str] = None
+    engine: Optional[EngineUsed] = None
 
 
 # ---------------------------------------------------------------------- answer
@@ -814,6 +875,8 @@ class AnswerRequest(Wire):
     # cahier ne s'ouvre.
     student_account_id: str = ""
     notebook_document_id: str = ""
+    # Moteur IA du pays pour cet usage — absent : modèle local.
+    engine: Optional[EngineChoice] = None
 
 
 class AnswerAccepted(Wire):
@@ -852,6 +915,7 @@ class AnswerStatus(Wire):
     queries: List[Dict[str, Any]] = []
     warnings: List[str] = []
     error: Optional[str] = None
+    engine: Optional[EngineUsed] = None
 
 
 # ---------------------------------------------------------------------- speech

@@ -13,6 +13,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.api.dependencies import require_service_token
+from app.api.engine_support import engine_for, engine_used, submit_traced
 from app.models.schemas import (
     AnswerAccepted,
     AnswerRequest,
@@ -42,6 +43,7 @@ async def answer(body: AnswerRequest, request: Request) -> AnswerAccepted:
         )
 
     tutor = request.app.state.tutor
+    llm, trace = engine_for(body, request)
 
     async def work():
         result = await tutor.answer(
@@ -52,6 +54,7 @@ async def answer(body: AnswerRequest, request: Request) -> AnswerAccepted:
             history=[turn.model_dump() for turn in body.history],
             student_account_id=body.student_account_id,
             notebook_document_id=body.notebook_document_id,
+            llm=llm,
         )
         logger.info(
             "réponse du tuteur",
@@ -64,7 +67,7 @@ async def answer(body: AnswerRequest, request: Request) -> AnswerAccepted:
         )
         return result
 
-    job = request.app.state.jobs.submit(work, lane="eleve")
+    job = submit_traced(request, trace, work, lane="eleve")
     return AnswerAccepted(request_id=body.request_id, job_id=job.id)
 
 
@@ -77,7 +80,10 @@ async def answer_status(job_id: str, request: Request) -> AnswerStatus:
             detail={"code": "JOB_NOT_FOUND"},
         )
     if job.status == "failed":
-        return AnswerStatus(job_id=job.id, status="failed", error=job.error)
+        return AnswerStatus(
+            job_id=job.id, status="failed", error=job.error,
+            engine=engine_used(job.engine),
+        )
     if job.status != "done":
         store = request.app.state.jobs
         return AnswerStatus(
@@ -96,4 +102,5 @@ async def answer_status(job_id: str, request: Request) -> AnswerStatus:
         citations=[TutorCitation(**c) for c in result.citations],
         queries=result.queries,
         warnings=result.warnings,
+        engine=engine_used(job.engine),
     )

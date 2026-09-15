@@ -17,6 +17,7 @@ import logging
 from fastapi import APIRouter, Depends, Request, status
 
 from app.api.dependencies import require_service_token
+from app.api.engine_support import engine_for, engine_used, submit_traced
 from app.config import Settings, get_settings
 from app.core.proposal import discuter, proposer
 from app.models.schemas import (
@@ -35,8 +36,9 @@ router = APIRouter(tags=["extract"], dependencies=[Depends(require_service_token
 async def proposal(body: ProposalRequest, request: Request) -> ProposalResponse:
     """Propose une réparation. N'applique rien, ne stocke rien."""
 
+    llm, trace = engine_for(body, request)
     resultat = await proposer(
-        request.app.state.llm,
+        llm,
         body.passage,
         signalements=body.issues,
     )
@@ -58,6 +60,7 @@ async def proposal(body: ProposalRequest, request: Request) -> ProposalResponse:
         uncertain=resultat.incertaine,
         changed_symbols=resultat.symboles_modifies,
         warning=resultat.avertissement,
+        engine=engine_used(trace),
     )
 
 
@@ -91,12 +94,14 @@ async def proposal_chat(
     état, il ne se souvient d'aucun tour.
     """
 
-    llm = request.app.state.llm
+    llm, trace = engine_for(body, request)
     texte = body.text
     consigne = body.instruction
     historique = [tour.model_dump() for tour in body.history]
 
-    job = request.app.state.jobs.submit(
+    job = submit_traced(
+        request,
+        trace,
         lambda: discuter(
             llm,
             texte,

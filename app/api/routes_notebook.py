@@ -16,6 +16,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from app.api.dependencies import require_service_token
+from app.api.engine_support import engine_for, engine_used, submit_traced
 from app.config import Settings, get_settings
 from app.core.generation import CourseGenerator
 from app.models.schemas import (
@@ -166,12 +167,15 @@ async def generate(
     `GET /generate/{jobId}`, comme pour un cours.
     """
 
+    engine_llm, trace = engine_for(body, request)
     generator = CourseGenerator(
-        llm=request.app.state.llm,
+        llm=engine_llm,
         retriever=request.app.state.retriever,
         settings=settings,
     )
-    job = request.app.state.jobs.submit(
+    job = submit_traced(
+        request,
+        trace,
         lambda: generator.generate_blocks(
             kind=body.kind,
             text=body.text,

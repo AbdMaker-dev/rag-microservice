@@ -23,6 +23,7 @@ from app.api import (
     routes_notebook,
     routes_generate,
     routes_documents,
+    routes_engines,
     routes_extract,
     routes_health,
     routes_index,
@@ -130,6 +131,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_speech.router)
     app.include_router(routes_answer.router)
     app.include_router(routes_notebook.router)
+    app.include_router(routes_engines.router)
 
     @app.exception_handler(Exception)
     async def unhandled(request, exc):  # noqa: ANN001, ARG001
