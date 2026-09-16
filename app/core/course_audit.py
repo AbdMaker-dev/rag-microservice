@@ -97,6 +97,10 @@ def _read(raw: str) -> List[dict]:
     blocks = _BLOCK.split(raw)[1:]
     found = []
     for block in blocks:
+        # Un bloc s'arrête au titre suivant, quel qu'il soit : vu le
+        # 16/09/2026, « ### AUCUN » (pour une autre part) se collait dans la
+        # correction du dernier problème.
+        block = re.split(r"^\s*#{2,4}\s*\S", block, maxsplit=1, flags=re.MULTILINE)[0]
         marks = list(_FIELD.finditer(block))
         values = {}
         for index, mark in enumerate(marks):

@@ -76,3 +76,11 @@ def test_la_route_rend_l_audit_au_sondage():
     severities = {f["severity"] for f in body["audit"]["findings"]}
     assert severities == {"certaine", "probable"}
     assert body["engine"]["provider"] == "local"
+
+
+def test_un_titre_suivant_ne_se_colle_pas_dans_la_correction():
+    """Vu le 16/09/2026 : « ### AUCUN » finissait dans la correction."""
+
+    result = _run([QUADRANT + "\n### AUCUN\nPour les autres sections, rien à signaler."])
+    relecture = [f for f in result.findings if f.source == "relecture"]
+    assert relecture[0].correction == "dans le deuxième quadrant"
