@@ -55,4 +55,9 @@ def submit_traced(request: Request, trace: EngineTrace, work, *, lane: str):
 def engine_used(trace: Optional[EngineTrace]) -> Optional[EngineUsed]:
     if trace is None:
         return None
-    return EngineUsed(provider=trace.provider, model=trace.model, fallback=trace.fell_back)
+    return EngineUsed(
+        provider=trace.provider,
+        model=trace.model,
+        fallback=trace.fell_back,
+        fallback_reason=trace.errors[-1][:200] if trace.fell_back and trace.errors else None,
+    )

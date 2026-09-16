@@ -195,7 +195,8 @@ def test_la_route_en_ligne_trace_claude_puis_le_repli_local(monkeypatch):
     job = client.post("/generate/blocks", headers=TOKEN, json=_blocks_body(engine)).json()["jobId"]
     body = _wait(client, f"/generate/{job}")
     assert body["status"] == "done"
-    assert body["engine"] == {"provider": "claude", "model": "claude-sonnet-5", "fallback": True}
+    assert body["engine"]["provider"] == "claude" and body["engine"]["fallback"] is True
+    assert "503" in body["engine"]["fallbackReason"]
     assert "ENGINE_FALLBACK_LOCAL" in body["warnings"]
     assert CLE not in json.dumps(body)
 

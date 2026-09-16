@@ -90,6 +90,10 @@ class EngineUsed(Wire):
     provider: str
     model: str
     fallback: bool = False
+    # Pourquoi le fournisseur est tombé (extrait de sa réponse, sans la clé) :
+    # le 16/09/2026, un modèle retiré (404) retombait en local sans que le
+    # super admin le voie.
+    fallback_reason: Optional[str] = None
 
 
 class EngineTestRequest(Wire):
