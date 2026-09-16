@@ -36,6 +36,7 @@ from app.core.generation import (
     _render_passages,
 )
 from app.core.llm import LlmProvider
+from app.core.math_check import check as check_calculations
 from app.core.retrieval import Passage, Retriever
 from app.models.schemas import Scope
 
@@ -84,6 +85,9 @@ Règles absolues :
 - Pour EXPLIQUER (reformuler, donner une image, un exemple), tu peux t'appuyer sur tes propres connaissances, sans contredire le cours.
 - Si les extraits ne contiennent pas la réponse : réponds avec tes connaissances, en commençant EXACTEMENT par « Ce n'est pas dans ton cours, mais voici ce que je sais : ».
 - Explique directement, comme un professeur. N'écris jamais « [S1] indique que », « selon l'extrait » ou « le document dit » : place l'étiquette [S1] en fin de phrase, comme une référence.
+- Si l'élève te signale une erreur, ou si tu en vois une dans une de tes réponses précédentes : RECALCULE avant de répondre. Si tu t'es trompé, commence par « J'ai fait une erreur : », donne le résultat corrigé et explique en une phrase d'où venait l'erreur. Ne redonne jamais un résultat contesté sans l'avoir recalculé. S'il n'y avait pas d'erreur, montre-le par le calcul.
+- Si l'élève dit qu'il ne comprend pas : ne redis PAS la même définition. Change d'angle — un exemple chiffré pas à pas, une image géométrique ou concrète — puis termine par une question qui cherche ce qui bloque (« Qu'est-ce qui te pose problème : … ou … ? »).
+- Recopie les nombres exactement d'une étape à l'autre : une racine, une fraction, un signe ou un i ne disparaissent jamais. Pour un nombre complexe x + iy, le point associé a pour coordonnées (x ; y), avec y recopié tel quel (1 + i√3 donne (1 ; √3)).
 - Si l'élève demande POURQUOI : explique d'où ça vient. Montre le petit calcul ou le raisonnement qui y mène à partir des formules du cours, étape par étape. Répéter l'énoncé n'est pas une explication.
 - Ne mets une étiquette [S1] que si CET extrait dit vraiment ce que tu écris. Ce qui vient de tes connaissances ne porte aucune étiquette.
 - Termine par une petite question qui vérifie que l'élève a compris : elle va sous « ### VÉRIFICATION », pas dans l'explication.
@@ -299,6 +303,7 @@ class Tutor:
                         if passages
                         else "Aucun extrait du cours ne couvre cette question."
                     )
+                    + _consigne_de_situation(question)
                     + f"\n\nQuestion de l'élève, celle à laquelle tu réponds : {question}"
                 ),
             }
@@ -307,6 +312,7 @@ class Tutor:
             str(turn.get("content", "")) for turn in history if turn.get("role") == "lawal"
         ]
         repetition_reminded = False
+        math_reminded = False
 
         format_reminded = False
         for _ in range(self._settings.answer_max_queries + 1):
@@ -359,6 +365,31 @@ class Tutor:
                         }
                     )
                     continue
+                if self._settings.answer_math_check:
+                    findings = check_calculations(text)
+                    if findings and not math_reminded:
+                        # Note d'évaluation du 16/09/2026 : « (1, 3) » pour
+                        # 1 + i√3. SymPy a calculé ; le modèle ne fait que
+                        # réécrire, avec les valeurs sous les yeux.
+                        math_reminded = True
+                        warnings.append("MATH_CHECK_RETRIED")
+                        messages.append({"role": "assistant", "content": raw})
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    "Vérification automatique de tes calculs (faite par "
+                                    "un logiciel de calcul, elle est sûre) :\n"
+                                    + "\n".join(f"- {f.message}" for f in findings)
+                                    + "\n\nRéécris ta réponse en corrigeant ces points, avec "
+                                    "exactement ces valeurs, dans le même format. Ne signale "
+                                    "pas la vérification à l'élève."
+                                ),
+                            }
+                        )
+                        continue
+                    if findings:
+                        warnings.append("MATH_CHECK_STILL_WRONG")
                 text = await self._review(
                     llm=llm,
                     question=question,
@@ -553,30 +584,69 @@ def _sauver_json(raw: str) -> str:
 
 
 # Une réponse passée n'est qu'un rappel : son début suffit, et la recopier
-# entière invitait le modèle à la continuer.
+# entière invitait le modèle à la continuer. SAUF la dernière : c'est elle
+# que l'élève conteste (« tu t'es trompé »), et l'erreur signalée par la note
+# d'évaluation du 16/09/2026 — (1 ; 3) pour 1 + i√3 — tombait après la coupe.
 _RAPPEL_MAX = 300
+_DERNIERE_MAX = 1_500
 
 
 def _rappel_du_fil(history: List[dict]) -> str:
     """Les échanges précédents, en rappel de contexte — jamais en dialogue."""
 
     lines = []
-    for turn in history:
+    last_lawal = max(
+        (index for index, turn in enumerate(history) if turn.get("role") == "lawal"),
+        default=-1,
+    )
+    for index, turn in enumerate(history):
         content = " ".join(str(turn.get("content", "")).split())
         if not content:
             continue
         if turn.get("role") == "lawal":
-            short = content if len(content) <= _RAPPEL_MAX else content[:_RAPPEL_MAX] + "…"
+            limit = _DERNIERE_MAX if index == last_lawal else _RAPPEL_MAX
+            short = content if len(content) <= limit else content[:limit] + "…"
             lines.append(f"- Tu as déjà expliqué : {short}")
         else:
             lines.append(f"- L'élève a demandé : {content}")
     if not lines:
         return ""
     return (
-        "Rappel de la conversation (DÉJÀ TRAITÉ, ne le répète pas) :\n"
+        "Rappel de la conversation (déjà traité : ne le répète pas, mais "
+        "corrige-le si l'élève y signale une erreur) :\n"
         + "\n".join(lines)
         + "\n\n"
     )
+
+
+# Deux situations qu'un petit modèle rate s'il ne les voit pas nommées
+# (note d'évaluation du 16/09/2026) : l'élève conteste un résultat, ou dit
+# qu'il ne comprend pas. Reconnues ici, sans modèle, et rappelées au plus
+# près de la question.
+_SIGNALE_ERREUR = re.compile(
+    r"\b(faux|fausse|erreur|tromp|incorrect|pas juste|pas bon|n'est pas (?:ça|ca|correct)|v[ée]rifie|corrige)",
+    re.IGNORECASE,
+)
+_NE_COMPREND_PAS = re.compile(
+    r"(comprends? (?:toujours |encore |vraiment )?pas|pas compris|je suis perdu|perdue?\b"
+    r"|explique(?:-le|-moi)? autrement|j'y arrive pas|c'est flou|pas clair)",
+    re.IGNORECASE,
+)
+
+
+def _consigne_de_situation(question: str) -> str:
+    notes = []
+    if _SIGNALE_ERREUR.search(question):
+        notes.append(
+            "L'élève signale une erreur : recalcule d'abord ton résultat précédent. "
+            "S'il est faux, commence par « J'ai fait une erreur : » et donne la correction."
+        )
+    if _NE_COMPREND_PAS.search(question):
+        notes.append(
+            "L'élève dit ne pas comprendre : ne répète pas ta définition, change "
+            "d'approche avec un exemple chiffré pas à pas, et demande ce qui bloque."
+        )
+    return ("\n\n" + "\n".join(notes)) if notes else ""
 
 
 def _sans_compris(text: str) -> str:

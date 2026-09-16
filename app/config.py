@@ -84,6 +84,9 @@ class Settings(BaseSettings):
     # (suite croissante). Un relecteur moins fiable que l'auteur abîme plus
     # qu'il ne répare — à rallumer avec un modèle qui se relit mieux.
     answer_review: bool = False
+    # La vérification des CALCULS par SymPy (note d'évaluation du 16/09/2026) :
+    # déterministe, elle ne renvoie en correction qu'une erreur certaine.
+    answer_math_check: bool = True
 
     # --- Synthèse vocale ----------------------------------------------------------
     # La voix choisie à l'oreille par Alioune sur trois échantillons

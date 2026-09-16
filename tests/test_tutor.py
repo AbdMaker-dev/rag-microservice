@@ -307,9 +307,75 @@ def test_une_reponse_recopiee_du_fil_est_relancee_sur_la_nouvelle_question():
 def test_une_longue_reponse_passee_n_est_rappelee_que_par_son_debut():
     from app.core.tutor import _rappel_du_fil
 
-    rappel = _rappel_du_fil([{"role": "lawal", "content": "x" * 1000}])
+    rappel = _rappel_du_fil([
+        {"role": "lawal", "content": "x" * 1000},
+        {"role": "eleve", "content": "Et ensuite ?"},
+        {"role": "lawal", "content": "y" * 1000},
+    ])
     assert "x" * 300 + "…" in rappel
     assert "x" * 301 not in rappel
+    # la DERNIÈRE réponse reste entière : c'est elle que l'élève conteste
+    assert "y" * 1000 in rappel
+
+
+def test_l_erreur_contestee_reste_visible_dans_le_rappel():
+    """Note d'évaluation du 16/09/2026 : « (1 ; 3) » pour 1 + i√3, écrit
+    en fin de réponse — coupé à 300 caractères, Lawal ne pouvait pas le voir
+    quand l'élève le contestait."""
+
+    from app.core.tutor import _rappel_du_fil
+
+    longue = "On calcule pas à pas. " * 20 + "Les coordonnées du point sont donc (1, 3)."
+    rappel = _rappel_du_fil([{"role": "eleve", "content": "Calcule 2e^{iπ/3}"},
+                             {"role": "lawal", "content": longue}])
+    assert "(1, 3)" in rappel
+    assert "corrige-le si l'élève y signale une erreur" in rappel
+
+
+@pytest.mark.parametrize("question", [
+    "Tu t'es trompé, c'est pas (1,3)",
+    "C'est faux ton résultat",
+    "Vérifie ta réponse stp",
+])
+def test_une_erreur_signalee_est_nommee_au_modele(question):
+    retriever = _Retriever({"cours-publie": [_passage()]})
+    llm = _Llm(["### RÉPONSE\nJ'ai fait une erreur : (1 ; √3).\n### VÉRIFICATION\n?"])
+    tutor = Tutor(llm=llm, retriever=retriever, settings=_settings())
+    asyncio.run(tutor.answer(question=question, scope=_scope(), course_id="cours-7"))
+    assert "L'élève signale une erreur : recalcule" in llm.messages_seen[0][-1]["content"]
+
+
+@pytest.mark.parametrize("question", [
+    "Je comprends toujours pas",
+    "Explique autrement",
+    "je suis perdu",
+])
+def test_une_incomprehension_demande_un_autre_angle(question):
+    retriever = _Retriever({"cours-publie": [_passage()]})
+    llm = _Llm(["### RÉPONSE\nPrenons z = 1.\n### VÉRIFICATION\n?"])
+    tutor = Tutor(llm=llm, retriever=retriever, settings=_settings())
+    asyncio.run(tutor.answer(question=question, scope=_scope(), course_id="cours-7"))
+    last = llm.messages_seen[0][-1]["content"]
+    assert "ne répète pas ta définition" in last
+    assert "L'élève signale une erreur" not in last
+
+
+def test_une_question_ordinaire_ne_porte_aucune_consigne_de_situation():
+    retriever = _Retriever({"cours-publie": [_passage()]})
+    llm = _Llm(["### RÉPONSE\nLe module.\n### VÉRIFICATION\n?"])
+    tutor = Tutor(llm=llm, retriever=retriever, settings=_settings())
+    asyncio.run(tutor.answer(question="Comment calculer le module de 3+4i ?",
+                             scope=_scope(), course_id="cours-7"))
+    last = llm.messages_seen[0][-1]["content"]
+    assert "signale une erreur" not in last and "ne répète pas ta définition" not in last
+
+
+def test_les_regles_de_correction_et_d_incomprehension_sont_dans_le_prompt():
+    from app.core.tutor import _SYSTEM
+
+    assert "J'ai fait une erreur :" in _SYSTEM
+    assert "ne redis PAS la même définition" in _SYSTEM
+    assert "1 + i√3 donne (1 ; √3)" in _SYSTEM
 
 
 def test_une_reponse_differente_n_est_pas_prise_pour_une_repetition():
@@ -437,4 +503,42 @@ def test_la_relecture_est_eteinte_par_defaut():
     tutor = Tutor(llm=llm, retriever=retriever, settings=_settings())
     answer = asyncio.run(tutor.answer(question="Le centre ?", scope=_scope(), course_id="cours-7"))
     assert answer.text == JUSTE
+    assert len(llm.messages_seen) == 1
+
+
+FAUX_COORD = ("### RÉPONSE\nOn a \\( 2e^{i\\pi/3} = 1 + i\\sqrt{3} \\). "
+              "Les coordonnées du point sont donc (1, 3).\n### VÉRIFICATION\n?")
+JUSTE_COORD = ("### RÉPONSE\nOn a \\( 2e^{i\\pi/3} = 1 + i\\sqrt{3} \\). "
+               "Les coordonnées du point sont donc \\( (1 ; \\sqrt{3}) \\).\n### VÉRIFICATION\n?")
+
+
+def test_un_calcul_faux_est_renvoye_en_correction_avec_la_valeur_sure():
+    """Note d'évaluation du 16/09/2026 : SymPy calcule, le modèle réécrit."""
+
+    retriever = _Retriever({"cours-publie": [_passage()]})
+    llm = _Llm([FAUX_COORD, JUSTE_COORD])
+    tutor = Tutor(llm=llm, retriever=retriever, settings=_settings())
+    answer = asyncio.run(tutor.answer(question="Calcule 2e^{iπ/3}", scope=_scope(), course_id="cours-7"))
+    assert "(1 ; \\sqrt{3})" in answer.text
+    assert "MATH_CHECK_RETRIED" in answer.warnings
+    assert "MATH_CHECK_STILL_WRONG" not in answer.warnings
+    relance = llm.messages_seen[1][-1]["content"]
+    assert "logiciel de calcul" in relance and "√3" in relance
+
+
+def test_un_calcul_toujours_faux_est_signale_sans_boucler():
+    retriever = _Retriever({"cours-publie": [_passage()]})
+    llm = _Llm([FAUX_COORD, FAUX_COORD])
+    tutor = Tutor(llm=llm, retriever=retriever, settings=_settings())
+    answer = asyncio.run(tutor.answer(question="Calcule 2e^{iπ/3}", scope=_scope(), course_id="cours-7"))
+    assert "MATH_CHECK_STILL_WRONG" in answer.warnings
+    assert len(llm.messages_seen) == 2
+
+
+def test_un_calcul_juste_ne_coute_aucun_appel_de_plus():
+    retriever = _Retriever({"cours-publie": [_passage()]})
+    llm = _Llm([JUSTE_COORD])
+    tutor = Tutor(llm=llm, retriever=retriever, settings=_settings())
+    answer = asyncio.run(tutor.answer(question="Calcule 2e^{iπ/3}", scope=_scope(), course_id="cours-7"))
+    assert "MATH_CHECK_RETRIED" not in answer.warnings
     assert len(llm.messages_seen) == 1

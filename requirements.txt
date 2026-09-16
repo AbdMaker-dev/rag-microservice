@@ -27,3 +27,6 @@ pypdf==6.2.0
 
 # La voix des cours — synthèse locale sur CPU, aucun service extérieur.
 piper-tts==1.7.0
+
+# Vérifier les calculs de Lawal sans modèle (note d'évaluation du 16/09/2026).
+sympy==1.14.0
