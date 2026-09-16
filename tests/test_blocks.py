@@ -238,3 +238,21 @@ def test_les_accents_unicode_ne_sont_jamais_casses():
 
     parsed = _parse_json_block('{"t": "Les id\\u00e9es cl\\u00e9s\\u2026"}')
     assert parsed["t"] == "Les idées clés…"
+
+
+def test_une_reponse_qui_contredit_son_explication_est_ecartee():
+    """16/09/2026, cours publié « Nombres complexes » : réponse enregistrée A,
+    explication « La réponse correcte est C) ». L'élève juste était compté faux."""
+
+    from app.core.generation import reponse_annoncee
+
+    contredite = ("### QUESTION\nForme de -1 + i ?\n- A) 2e^{iπ/4}\n- B) x\n- C) √2 e^{i3π/4}\n- D) y\n"
+                  "### RÉPONSE A\n### EXPLICATION\nLa réponse correcte est C) √2 e^{i3π/4}.\n")
+    juste = ("### QUESTION\nImage de 2 ?\n- A) -1 + i√3\n- B) x\n- C) y\n- D) z\n"
+             "### RÉPONSE A\n### EXPLICATION\nLa réponse correcte est A) -1 + i√3.\n")
+    generator = CourseGenerator(llm=ScriptedLlm([]), retriever=FakeRetriever(), settings=get_settings())
+    items, _, warnings = generator._lire_bloc("quiz", contredite + juste)
+    assert [i["question"] for i in items] == ["Image de 2 ?"]
+    assert "QUIZ_ANSWER_CONTRADICTED" in warnings
+    assert reponse_annoncee("La bonne réponse est B.") == 1
+    assert reponse_annoncee("On calcule le module puis l'argument.") is None

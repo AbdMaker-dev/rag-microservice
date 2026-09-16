@@ -812,6 +812,10 @@ class AuditRequest(Wire):
     course_id: str = Field(min_length=1, max_length=255)
     scope: Scope
     text: str = Field(min_length=1, max_length=120_000)
+    # Les blocs du cours, relus eux aussi : un quiz dont la réponse contredit
+    # l'explication fait compter faux l'élève qui répond juste.
+    quizzes: List[Dict[str, Any]] = Field(default_factory=list, max_length=50)
+    exercises: List[Dict[str, Any]] = Field(default_factory=list, max_length=50)
     # Moteur IA du pays pour l'usage RELECTURE — absent : modèle local.
     engine: Optional[EngineChoice] = None
 

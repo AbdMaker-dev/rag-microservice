@@ -84,3 +84,13 @@ def test_un_titre_suivant_ne_se_colle_pas_dans_la_correction():
     result = _run([QUADRANT + "\n### AUCUN\nPour les autres sections, rien à signaler."])
     relecture = [f for f in result.findings if f.source == "relecture"]
     assert relecture[0].correction == "dans le deuxième quadrant"
+
+
+def test_un_quiz_qui_contredit_son_explication_est_une_erreur_certaine():
+    quiz = {"question": "Forme de -1 + i ?", "choices": ["a", "b", "c", "d"], "answer": 0,
+            "explanation": "La réponse correcte est C) √2 e^{i3π/4}."}
+    result = asyncio.run(audit_course(text="Un cours.", llm=ScriptedLlm(["### AUCUN"]),
+                                      timeout=10, num_ctx=8192, quizzes=[quiz]))
+    certain = [f for f in result.findings if f.severity == "certaine"]
+    assert len(certain) == 1
+    assert "enregistrée est A" in certain[0].explanation and "annonce C" in certain[0].explanation

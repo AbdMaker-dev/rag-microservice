@@ -673,6 +673,35 @@ def lire_quiz(texte: str) -> List[dict]:
     return questions
 
 
+_REPONSE_ANNONCEE = re.compile(
+    r"(?:la\s+)?(?:bonne\s+)?r[ée]ponse\s+(?:correcte\s+|juste\s+|exacte\s+)?"
+    r"(?:est|:)\s*(?:donc\s+)?(?:la\s+|le\s+)?(?:choix\s+|proposition\s+|option\s+)?"
+    r"\(?([A-D])\s*[)\].,:\s]",
+    re.IGNORECASE,
+)
+
+
+def reponse_annoncee(explication: str) -> Optional[int]:
+    """La lettre que l'explication donne pour bonne réponse, s'il y en a une."""
+
+    trouve = _REPONSE_ANNONCEE.search(explication or "")
+    return "ABCD".index(trouve.group(1).upper()) if trouve else None
+
+
+def _quiz_contredit(item: dict) -> bool:
+    """La réponse enregistrée contredit-elle l'explication ?
+
+    Constaté le 16/09/2026 dans le cours publié « Nombres complexes » : la
+    réponse enregistrée était A, et l'explication disait « La réponse
+    correcte est C ». L'élève qui répond juste est compté faux. On ne sait
+    pas laquelle des deux est la bonne : la question est écartée, et le
+    professeur le voit (QUIZ_ANSWER_CONTRADICTED).
+    """
+
+    annoncee = reponse_annoncee(str(item.get("explanation") or ""))
+    return annoncee is not None and annoncee != item.get("answer")
+
+
 def _vient_de_l_exemple(item: dict) -> bool:
     """L'item est-il l'exemple de mise en forme, recopié tel quel ?
 
@@ -2114,17 +2143,23 @@ class CourseGenerator:
 
         lire = lire_quiz if kind == "quiz" else lire_exercices
         balise = _BALISE_QUESTION if kind == "quiz" else _BALISE_EXERCICE
-        items = [x for x in lire(texte) if not _vient_de_l_exemple(x)]
+        lus = [x for x in lire(texte) if not _vient_de_l_exemple(x)]
+        items = [x for x in lus if not (kind == "quiz" and _quiz_contredit(x))]
+        contredits = ["QUIZ_ANSWER_CONTRADICTED"] if len(items) < len(lus) else []
         if items:
             # Une balise sans son corps — un exercice sans corrigé, une
             # question à trois propositions — est ignorée par le lecteur.
             # On le dit, sinon le professeur croit avoir tout reçu.
             rejetes = len(balise.findall(texte)) - len(items)
-            return items, "", (["BLOCK_ITEMS_DROPPED"] if rejetes > 0 else [])
+            return items, "", (["BLOCK_ITEMS_DROPPED"] if rejetes > 0 else []) + contredits
         parsed = _parse_json_block(texte)
         if not parsed:
-            return [], "", []
-        return self._items_du_json(kind, parsed), "", ["BLOCK_JSON_FALLBACK"]
+            return [], "", contredits
+        repli = self._items_du_json(kind, parsed)
+        gardes = [x for x in repli if not (kind == "quiz" and _quiz_contredit(x))]
+        if len(gardes) < len(repli):
+            contredits = ["QUIZ_ANSWER_CONTRADICTED"]
+        return gardes, "", ["BLOCK_JSON_FALLBACK"] + contredits
 
     @staticmethod
     def _items_du_json(kind: str, parsed: dict) -> List[dict]:

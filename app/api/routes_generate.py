@@ -517,6 +517,8 @@ async def course_audit(
             llm=engine_llm,
             timeout=settings.generation_timeout_s,
             num_ctx=settings.generation_context_tokens,
+            quizzes=body.quizzes,
+            exercises=body.exercises,
         ),
         lane="prof",
     )

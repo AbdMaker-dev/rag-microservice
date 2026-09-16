@@ -117,8 +117,49 @@ def _quote_in(excerpt: str, text: str) -> bool:
     return len(quote) >= 12 and quote in _normalise(text)
 
 
-async def audit_course(*, text: str, llm: LlmProvider, timeout: float, num_ctx: int) -> AuditResult:
+def _blocks_text(quizzes: List[dict], exercises: List[dict]) -> str:
+    """Les blocs, écrits pour le correcteur, avec la réponse ANNONCÉE."""
+
+    lines: List[str] = []
+    for number, quiz in enumerate(quizzes, start=1):
+        choices = quiz.get("choices") or []
+        answer = quiz.get("answer")
+        lines.append(f"Quiz {number} : {quiz.get('question', '')}")
+        lines += [f"{'ABCD'[i]}) {c}" for i, c in enumerate(choices[:4])]
+        if isinstance(answer, int) and 0 <= answer < 4:
+            lines.append(f"Bonne réponse enregistrée : {'ABCD'[answer]}")
+        lines.append(f"Explication : {quiz.get('explanation', '')}\n")
+    for number, exercise in enumerate(exercises, start=1):
+        lines.append(f"Exercice {number} : {exercise.get('statement', '')}")
+        lines.append(f"Corrigé : {exercise.get('solution', '')}\n")
+    return "\n".join(lines)
+
+
+async def audit_course(
+    *, text: str, llm: LlmProvider, timeout: float, num_ctx: int,
+    quizzes: List[dict] = (), exercises: List[dict] = (),
+) -> AuditResult:
     result = AuditResult(findings=[])
+
+    # Certain, sans modèle : la réponse enregistrée contredit l'explication.
+    from app.core.generation import _quiz_contredit, reponse_annoncee
+
+    for number, quiz in enumerate(quizzes, start=1):
+        if _quiz_contredit(quiz):
+            annoncee = "ABCD"[reponse_annoncee(str(quiz.get("explanation") or ""))]
+            enregistree = quiz.get("answer")
+            result.findings.append(AuditFinding(
+                severity="certaine", source="calcul",
+                excerpt=str(quiz.get("question", "")),
+                explanation=(
+                    f"Quiz {number} : la bonne réponse enregistrée est "
+                    f"{'ABCD'[enregistree] if isinstance(enregistree, int) and 0 <= enregistree < 4 else enregistree}, "
+                    f"mais l'explication annonce {annoncee}. Un élève qui répond juste est compté faux."
+                ),
+            ))
+    blocks = _blocks_text(list(quizzes), list(exercises))
+    if blocks:
+        text = f"{text}\n\n{blocks}"
 
     for finding in check_calculations(text):
         result.findings.append(AuditFinding(
