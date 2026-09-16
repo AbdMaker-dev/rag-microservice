@@ -274,3 +274,56 @@ async def try_engine(engine, client: httpx.AsyncClient) -> dict:
             "error": f"{type(error).__name__}: {error}"[:300],
         }
     return {"ok": True, "latencyMs": int((time.monotonic() - started) * 1000), "error": None}
+
+
+_CLAUDE_MODELS_URL = "https://api.anthropic.com/v1/models"
+_OPENAI_MODELS_URL = "https://api.openai.com/v1/models"
+_GEMINI_MODELS_URL = "https://generativelanguage.googleapis.com/v1beta/openai/models"
+
+# Ce que la liste d'un fournisseur contient et qui n'écrit pas de texte :
+# embeddings, voix, images, recherche. Proposer ces modèles au super admin
+# serait lui tendre un piège — la génération échouerait au premier appel.
+_NOT_TEXT = ("embedding", "tts", "transcribe", "audio", "realtime", "image",
+             "dall-e", "whisper", "moderation", "search", "aqa", "imagen", "veo")
+_OPENAI_TEXT_PREFIXES = ("gpt-", "o1", "o3", "o4", "chatgpt-")
+
+
+async def list_models(provider: str, api_key: str, client: httpx.AsyncClient) -> dict:
+    """Les modèles qui écrivent du texte, tels que CETTE clé les voit.
+
+    Rien en dur : le jour où un fournisseur sort un modèle, il apparaît dans
+    l'écran du super admin sans qu'on touche au code.
+    """
+
+    try:
+        if provider == "claude":
+            response = await client.get(
+                _CLAUDE_MODELS_URL,
+                params={"limit": 1000},
+                headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
+                timeout=30.0,
+            )
+            _raise_for("Claude", response)
+            models = [
+                {"id": item["id"], "name": item.get("display_name") or item["id"]}
+                for item in response.json().get("data", [])
+            ]
+        else:
+            url = _OPENAI_MODELS_URL if provider == "gpt" else _GEMINI_MODELS_URL
+            response = await client.get(
+                url, headers={"Authorization": f"Bearer {api_key}"}, timeout=30.0
+            )
+            _raise_for(provider.upper(), response)
+            models = []
+            for item in response.json().get("data", []):
+                model_id = str(item.get("id", "")).removeprefix("models/")
+                if provider == "gpt" and not model_id.startswith(_OPENAI_TEXT_PREFIXES):
+                    continue
+                if provider == "gemini" and not model_id.startswith("gemini"):
+                    continue
+                models.append({"id": model_id, "name": model_id})
+    except (httpx.HTTPError, GenerationError, ValueError) as error:
+        return {"models": [], "error": f"{type(error).__name__}: {error}"[:300]}
+    models = [m for m in models if not any(word in m["id"].lower() for word in _NOT_TEXT)]
+    unique = {m["id"]: m for m in models}
+    return {"models": sorted(unique.values(), key=lambda m: m["id"]), "error": None}

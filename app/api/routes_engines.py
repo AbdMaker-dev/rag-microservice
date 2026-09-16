@@ -9,8 +9,13 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Request
 
 from app.api.dependencies import require_service_token
-from app.core.engines import try_engine
-from app.models.schemas import EngineTestRequest, EngineTestResponse
+from app.core.engines import list_models, try_engine
+from app.models.schemas import (
+    EngineModelsRequest,
+    EngineModelsResponse,
+    EngineTestRequest,
+    EngineTestResponse,
+)
 
 router = APIRouter(tags=["engines"], dependencies=[Depends(require_service_token)])
 
@@ -21,3 +26,13 @@ async def engines_test(body: EngineTestRequest, request: Request) -> EngineTestR
     return EngineTestResponse(
         ok=result["ok"], latency_ms=result["latencyMs"], error=result["error"]
     )
+
+
+@router.post("/engines/models", response_model=EngineModelsResponse)
+async def engines_models(body: EngineModelsRequest, request: Request) -> EngineModelsResponse:
+    """Les modèles que la clé du pays peut utiliser, pour la liste du super admin."""
+
+    result = await list_models(
+        body.provider, body.api_key.get_secret_value(), request.app.state.http
+    )
+    return EngineModelsResponse(**result)

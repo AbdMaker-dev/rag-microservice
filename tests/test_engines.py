@@ -227,3 +227,55 @@ def test_la_route_de_test_de_cle():
     body = client.post("/engines/test", headers=TOKEN, json={
         "engine": {"provider": "gpt", "model": "modele-x", "apiKey": CLE}}).json()
     assert body["ok"] is False and "401" in body["error"]
+
+
+def test_la_liste_claude_rend_les_noms_affiches():
+    seen = {}
+
+    def handler(request):
+        seen["url"] = str(request.url)
+        seen["key"] = request.headers.get("x-api-key")
+        return httpx.Response(200, json={"data": [
+            {"id": "claude-sonnet-5", "display_name": "Claude Sonnet 5"},
+            {"id": "claude-fable-5-1", "display_name": "Claude Fable 5.1"},
+        ]})
+
+    client = _app(handler, ScriptedLlm([]))
+    body = client.post("/engines/models", headers=TOKEN,
+                       json={"provider": "claude", "apiKey": CLE}).json()
+    assert seen["url"].startswith("https://api.anthropic.com/v1/models")
+    assert seen["key"] == CLE
+    assert body == {"models": [{"id": "claude-fable-5-1", "name": "Claude Fable 5.1"},
+                               {"id": "claude-sonnet-5", "name": "Claude Sonnet 5"}],
+                    "error": None}
+
+
+def test_la_liste_gpt_ne_garde_que_les_modeles_qui_ecrivent():
+    def handler(request):
+        return httpx.Response(200, json={"data": [
+            {"id": "gpt-texte"}, {"id": "o3-raisonne"}, {"id": "text-embedding-3-large"},
+            {"id": "gpt-audio-preview"}, {"id": "whisper-1"}, {"id": "dall-e-3"},
+        ]})
+
+    client = _app(handler, ScriptedLlm([]))
+    body = client.post("/engines/models", headers=TOKEN, json={"provider": "gpt", "apiKey": CLE}).json()
+    assert [m["id"] for m in body["models"]] == ["gpt-texte", "o3-raisonne"]
+
+
+def test_la_liste_gemini_retire_le_prefixe_et_les_embeddings():
+    def handler(request):
+        assert str(request.url).startswith("https://generativelanguage.googleapis.com/")
+        return httpx.Response(200, json={"data": [
+            {"id": "models/gemini-flash-x"}, {"id": "models/gemini-embedding-001"},
+            {"id": "models/imagen-4"},
+        ]})
+
+    client = _app(handler, ScriptedLlm([]))
+    body = client.post("/engines/models", headers=TOKEN, json={"provider": "gemini", "apiKey": CLE}).json()
+    assert body["models"] == [{"id": "gemini-flash-x", "name": "gemini-flash-x"}]
+
+
+def test_une_cle_refusee_rend_une_liste_vide_et_l_erreur_sans_la_cle():
+    client = _app(lambda r: httpx.Response(401, text="invalid x-api-key"), ScriptedLlm([]))
+    body = client.post("/engines/models", headers=TOKEN, json={"provider": "claude", "apiKey": CLE}).json()
+    assert body["models"] == [] and "401" in body["error"] and CLE not in body["error"]

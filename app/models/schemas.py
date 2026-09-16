@@ -96,6 +96,21 @@ class EngineTestRequest(Wire):
     engine: EngineChoice
 
 
+class EngineModelsRequest(Wire):
+    provider: Literal["claude", "gpt", "gemini"]
+    api_key: SecretStr = Field(max_length=500)
+
+
+class EngineModel(Wire):
+    id: str
+    name: str
+
+
+class EngineModelsResponse(Wire):
+    models: List[EngineModel] = []
+    error: Optional[str] = None
+
+
 class EngineTestResponse(Wire):
     ok: bool
     latency_ms: int
