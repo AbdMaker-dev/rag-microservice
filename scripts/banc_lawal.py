@@ -18,6 +18,14 @@ explication. Les réponses se LISENT.
 
 Les cours visés sont ceux du serveur d'essai (Terminale S2, maths) : un
 autre serveur demande d'autres identifiants.
+
+Un moteur EN LIGNE (16/09/2026) : BANC_PROVIDER=gemini BANC_MODEL=… et la
+clé sur l'entrée standard — jamais en argument ni en variable affichée,
+pour qu'elle n'apparaisse ni dans `ps` ni dans l'historique du shell :
+
+    <déchiffrement côté management> | docker compose exec -T \
+        -e BANC_PROVIDER=gemini -e BANC_MODEL=gemini-3.8-flash \
+        api python /tmp/banc_lawal.py gemini
 """
 
 import json
@@ -102,9 +110,20 @@ def controles(text, checks):
     return ratés
 
 
+def engine():
+    provider = os.environ.get("BANC_PROVIDER", "")
+    if not provider or provider == "local":
+        return None
+    key = sys.stdin.readline().strip()
+    if len(key) < 10:
+        raise SystemExit("clé absente de l'entrée standard")
+    return {"provider": provider, "model": os.environ["BANC_MODEL"], "apiKey": key}
+
+
 def main():
     name = sys.argv[1] if len(sys.argv) > 1 else "banc"
     only = set(sys.argv[2:])
+    moteur = engine()
     results = []
     for key, course, question, history, checks in QUESTIONS:
         if only and key not in only:
@@ -112,7 +131,8 @@ def main():
         started = time.time()
         job = call("/answer", {"requestId": "banc-" + key, "courseId": course,
                                "question": question, "scope": SCOPE,
-                               "history": history})["jobId"]
+                               "history": history,
+                               **({"engine": moteur} if moteur else {})})["jobId"]
         while True:
             status = call(f"/answer/{job}")
             if status["status"] in ("done", "failed"):
