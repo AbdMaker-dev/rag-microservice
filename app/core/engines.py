@@ -19,6 +19,7 @@ Trois règles :
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
@@ -45,6 +46,26 @@ _EXTERNAL_TIMEOUT_S = 180.0
 class EngineError(GenerationError):
     """Le fournisseur en ligne n'a pas rendu de texte. Message sans secret."""
 
+    def __init__(self, message: str, status: int = 0) -> None:
+        super().__init__(message)
+        self.status = status
+
+
+# Une surcharge passagère n'est pas une panne. Constaté le 16/09/2026 :
+# gemini-3.8-flash répondait 503 « high demand » par vagues, et chaque vague
+# envoyait la question sur le modèle local — deux minutes au lieu de deux
+# secondes. On réessaie d'abord, brièvement ; une clé refusée (401, 403) ou
+# une demande invalide (400) ne se réessaie pas.
+_RETRY_STATUSES = {429, 500, 502, 503, 504}
+_RETRY_DELAYS_S = (2.0, 5.0)
+_sleep = asyncio.sleep
+
+
+def _retryable(error: Exception) -> bool:
+    if isinstance(error, EngineError):
+        return error.status in _RETRY_STATUSES
+    return isinstance(error, httpx.TransportError)
+
 
 def _raise_for(provider: str, response: httpx.Response) -> None:
     if response.status_code < 400:
@@ -52,7 +73,9 @@ def _raise_for(provider: str, response: httpx.Response) -> None:
     # Le corps d'erreur des fournisseurs ne contient pas la clé ; on n'en
     # garde qu'un extrait, pour dire au super admin CE qui ne va pas.
     detail = response.text[:200].replace("\n", " ")
-    raise EngineError(f"{provider} a répondu {response.status_code} : {detail}")
+    raise EngineError(
+        f"{provider} a répondu {response.status_code} : {detail}", response.status_code
+    )
 
 
 def _split_system(messages: List[dict]):
@@ -189,6 +212,7 @@ class EngineTrace:
     provider: str
     model: str
     fell_back: bool = False
+    retries: int = 0
     errors: List[str] = field(default_factory=list)
 
     def warnings(self) -> List[str]:
@@ -210,16 +234,18 @@ class FallbackLlm:
 
     async def complete(self, system: str, user: str) -> str:
         try:
-            return await self._primary.complete(system, user)
+            return await self._with_retries(lambda: self._primary.complete(system, user))
         except (httpx.HTTPError, GenerationError, ValueError) as error:
             self._record(error)
             return await self._local.complete(system, user)
 
     async def chat(self, messages, *, timeout, num_ctx, num_predict, schema=None) -> str:
         try:
-            return await self._primary.chat(
-                messages, timeout=timeout, num_ctx=num_ctx, num_predict=num_predict,
-                schema=schema,
+            return await self._with_retries(
+                lambda: self._primary.chat(
+                    messages, timeout=timeout, num_ctx=num_ctx, num_predict=num_predict,
+                    schema=schema,
+                )
             )
         except (httpx.HTTPError, GenerationError, ValueError) as error:
             self._record(error)
@@ -228,6 +254,21 @@ class FallbackLlm:
                 messages, timeout=timeout, num_ctx=num_ctx, num_predict=num_predict,
                 **kwargs,
             )
+
+    async def _with_retries(self, call):
+        for delay in (*_RETRY_DELAYS_S, None):
+            try:
+                return await call()
+            except (httpx.HTTPError, GenerationError, ValueError) as error:
+                if delay is None or not _retryable(error):
+                    raise
+                self.trace.retries += 1
+                logger.info(
+                    "moteur en ligne surchargé, nouvel essai",
+                    extra={"provider": self.trace.provider, "model": self.trace.model,
+                           "dans": delay},
+                )
+                await _sleep(delay)
 
     def _record(self, error: Exception) -> None:
         # httpx.HTTPError ne porte que l'adresse, jamais les en-têtes : la

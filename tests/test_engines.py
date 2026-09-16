@@ -188,7 +188,8 @@ def test_la_route_rend_le_moteur_qui_a_ecrit_meme_en_local():
     assert body["engine"]["fallback"] is False
 
 
-def test_la_route_en_ligne_trace_claude_puis_le_repli_local():
+def test_la_route_en_ligne_trace_claude_puis_le_repli_local(monkeypatch):
+    _sans_attente(monkeypatch)
     client = _app(lambda r: httpx.Response(503, text="indisponible"), ScriptedLlm([QUIZ]))
     engine = {"provider": "claude", "model": "claude-sonnet-5", "apiKey": CLE}
     job = client.post("/generate/blocks", headers=TOKEN, json=_blocks_body(engine)).json()["jobId"]
@@ -279,3 +280,55 @@ def test_une_cle_refusee_rend_une_liste_vide_et_l_erreur_sans_la_cle():
     client = _app(lambda r: httpx.Response(401, text="invalid x-api-key"), ScriptedLlm([]))
     body = client.post("/engines/models", headers=TOKEN, json={"provider": "claude", "apiKey": CLE}).json()
     assert body["models"] == [] and "401" in body["error"] and CLE not in body["error"]
+
+
+def _sans_attente(monkeypatch):
+    import app.core.engines as engines
+
+    async def instant(_):
+        return None
+
+    monkeypatch.setattr(engines, "_sleep", instant)
+
+
+def test_une_surcharge_passagere_est_reessayee_sans_repli(monkeypatch):
+    """16/09/2026 : gemini-3.8-flash répondait 503 « high demand » par vagues,
+    et chaque vague envoyait l'élève sur le modèle local."""
+
+    _sans_attente(monkeypatch)
+    answers = [httpx.Response(503, text="high demand"), httpx.Response(503, text="high demand"),
+               httpx.Response(200, json={"content": [{"type": "text", "text": "Enfin"}]})]
+    local = _Local()
+    llm, trace = resolve_llm(_engine(), local, _client(lambda r: answers.pop(0)))
+    text = asyncio.run(llm.chat([{"role": "user", "content": "q"}], timeout=10, num_ctx=0, num_predict=10))
+    assert text == "Enfin"
+    assert trace.retries == 2 and not trace.fell_back
+    assert local.calls == 0
+
+
+def test_une_surcharge_qui_dure_finit_en_repli_local(monkeypatch):
+    _sans_attente(monkeypatch)
+    calls = []
+    local = _Local()
+
+    def handler(request):
+        calls.append(1)
+        return httpx.Response(503, text="high demand")
+
+    llm, trace = resolve_llm(_engine(), local, _client(handler))
+    text = asyncio.run(llm.chat([{"role": "user", "content": "q"}], timeout=10, num_ctx=0, num_predict=10))
+    assert text == "réponse locale"
+    assert len(calls) == 3 and trace.fell_back and local.calls == 1
+
+
+def test_une_cle_refusee_ne_se_reessaie_pas(monkeypatch):
+    _sans_attente(monkeypatch)
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        return httpx.Response(401, text="invalid key")
+
+    llm, trace = resolve_llm(_engine(), _Local(), _client(handler))
+    asyncio.run(llm.chat([{"role": "user", "content": "q"}], timeout=10, num_ctx=0, num_predict=10))
+    assert len(calls) == 1 and trace.retries == 0 and trace.fell_back
