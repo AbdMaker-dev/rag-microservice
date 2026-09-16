@@ -185,7 +185,7 @@ def test_les_regles_pedagogiques_sont_dans_le_prompt():
     assert "question qui vérifie" in _SYSTEM
     assert "Adapte ton langage à la classe" in _SYSTEM
     assert "DERNIÈRE question" in _SYSTEM
-    assert "Le cours fait foi" in _SYSTEM
+    assert "Le cours est ta source principale" in _SYSTEM
     assert "Ce n'est pas dans ton cours, mais voici ce que je sais" in _SYSTEM
     assert "[S1] indique que" in _SYSTEM  # nommé pour être interdit
 
@@ -542,3 +542,14 @@ def test_un_calcul_juste_ne_coute_aucun_appel_de_plus():
     answer = asyncio.run(tutor.answer(question="Calcule 2e^{iπ/3}", scope=_scope(), course_id="cours-7"))
     assert "MATH_CHECK_RETRIED" not in answer.warnings
     assert len(llm.messages_seen) == 1
+
+
+def test_une_erreur_du_cours_est_signalee_et_non_recopiee():
+    """16/09/2026 : le cours publié écrit « z₁ = −1 + i est dans le premier
+    quadrant ». Lawal doit distinguer ce que dit le cours de ce qui est juste."""
+
+    from app.core.tutor import _SYSTEM
+
+    assert "un extrait n'est pas une preuve" in _SYSTEM
+    assert "ne le corrige pas en silence" in _SYSTEM
+    assert "Le cours indique … ; en fait … car …" in _SYSTEM

@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from app.api.dependencies import require_service_token
 from app.api.engine_support import engine_for, engine_used, submit_traced
 from app.config import Settings, get_settings
+from app.core.course_audit import AuditResult, audit_course
 from app.core.proposal import Discussion
 from app.core.generation import (
     AssessmentResult,
@@ -27,6 +28,9 @@ from app.core.generation import (
     PlanDraft,
 )
 from app.models.schemas import (
+    AuditFindingOut,
+    AuditRequest,
+    CourseAudit,
     AdjustRequest,
     AssessmentDraft,
     AssessmentExercise,
@@ -154,6 +158,23 @@ async def _generation_status(job_id: str, request: Request) -> GenerateStatus:
                 RejectedEdit(before=r["avant"], after=r["apres"], reason=r["raison"])
                 for r in tour.refusees
             ],
+        )
+
+    if isinstance(job.result, AuditResult):
+        audit: AuditResult = job.result
+        return GenerateStatus(
+            job_id=job.id,
+            status="done",
+            audit=CourseAudit(
+                findings=[
+                    AuditFindingOut(
+                        severity=f.severity, source=f.source, excerpt=f.excerpt,
+                        explanation=f.explanation, correction=f.correction,
+                    )
+                    for f in audit.findings
+                ]
+            ),
+            warnings=audit.warnings,
         )
 
     if isinstance(job.result, AssessmentResult):
@@ -469,4 +490,35 @@ async def assessment(
             "cours": len(body.sources),
         },
     )
+    return GenerateAccepted(request_id=body.request_id, job_id=job.id)
+
+
+@router.post(
+    "/audit/course",
+    response_model=GenerateAccepted,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def course_audit(
+    body: AuditRequest,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+) -> GenerateAccepted:
+    """Auditer un cours avant qu'un élève le lise : les calculs par SymPy
+    (certains), le reste par un correcteur qui doit citer le cours (probable,
+    ambiguïté). Rien n'est corrigé ; le statut se lit sur GET /generate/{jobId}.
+    """
+
+    engine_llm, trace = engine_for(body, request)
+    job = submit_traced(
+        request,
+        trace,
+        lambda: audit_course(
+            text=body.text,
+            llm=engine_llm,
+            timeout=settings.generation_timeout_s,
+            num_ctx=settings.generation_context_tokens,
+        ),
+        lane="prof",
+    )
+    logger.info("audit de cours lancé", extra={"requestId": body.request_id, "job": job.id})
     return GenerateAccepted(request_id=body.request_id, job_id=job.id)

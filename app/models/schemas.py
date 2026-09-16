@@ -801,6 +801,30 @@ class AssessmentDraft(Wire):
     exercises: List[AssessmentExercise] = []
 
 
+class AuditRequest(Wire):
+    """Auditer un cours avant publication (16/09/2026) : SymPy + correcteur."""
+
+    request_id: str
+    course_id: str = Field(min_length=1, max_length=255)
+    scope: Scope
+    text: str = Field(min_length=1, max_length=120_000)
+    # Moteur IA du pays pour l'usage RELECTURE — absent : modèle local.
+    engine: Optional[EngineChoice] = None
+
+
+class AuditFindingOut(Wire):
+    # certaine (SymPy) | probable | ambiguite (correcteur)
+    severity: Literal["certaine", "probable", "ambiguite"]
+    source: Literal["calcul", "relecture"]
+    excerpt: str
+    explanation: str
+    correction: str = ""
+
+
+class CourseAudit(Wire):
+    findings: List[AuditFindingOut] = []
+
+
 class GenerateAccepted(Wire):
     contract_version: Literal["1.0"] = CONTRACT_VERSION
     request_id: str
@@ -852,6 +876,7 @@ class GenerateStatus(Wire):
     warnings: List[str] = []
     error: Optional[str] = None
     engine: Optional[EngineUsed] = None
+    audit: Optional[CourseAudit] = None
 
 
 # ---------------------------------------------------------------------- answer
