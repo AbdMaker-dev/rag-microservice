@@ -53,6 +53,10 @@ correction : ce qu'il faudrait écrire
 S'il n'y a aucun problème, écris seulement : ### AUCUN"""
 
 
+class AuditFailed(RuntimeError):
+    """Le relecteur n'a pas pu se prononcer ; le message est montrable."""
+
+
 @dataclass(frozen=True)
 class AuditFinding:
     severity: str  # certaine | probable | ambiguite
@@ -248,10 +252,13 @@ async def audit_course(
                  )}],
                 timeout=timeout, num_ctx=num_ctx, num_predict=_OUTPUT_TOKENS,
             )
-        except GenerationError:
-            logger.warning("relecture d'une part du cours impossible", exc_info=True)
-            result.warnings.append("AUDIT_PART_FAILED")
-            continue
+        except GenerationError as erreur:
+            # Le relecteur ne répond pas (clé refusée, crédit épuisé, panne) :
+            # on ARRÊTE. Continuer sur les parts suivantes ferait attendre le
+            # professeur de longues minutes pour rendre un résultat partiel
+            # qu'on ne croira pas (20/09/2026).
+            logger.warning("relecture impossible : le relecteur ne répond pas", exc_info=True)
+            raise AuditFailed(str(erreur)) from erreur
         for values in _read(raw):
             if not _quote_in(values["extrait"], part):
                 # Le correcteur cite une phrase qui n'est pas dans le cours :

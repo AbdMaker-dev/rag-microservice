@@ -285,13 +285,23 @@ class FallbackLlm:
         return True
 
 
-def resolve_llm(engine, local: LlmProvider, client: httpx.AsyncClient):
-    """(llm à utiliser, trace). Sans moteur en ligne : le local, tracé tel."""
+def resolve_llm(engine, local: LlmProvider, client: httpx.AsyncClient, *, allow_fallback: bool = True):
+    """(llm à utiliser, trace). Sans moteur en ligne : le local, tracé tel.
+
+    `allow_fallback=False` pour la RELECTURE d'un cours : un modèle local ne
+    vérifie pas des maths, et management marque de toute façon la relecture
+    « non concluante ». Constaté le 20/09/2026 : Claude refusait en une
+    seconde (crédit épuisé), le repli local tournait quinze minutes, et le
+    professeur lisait « non vérifié » au bout. Mieux vaut échouer tout de
+    suite en disant pourquoi.
+    """
 
     primary = external_provider(engine, client)
     if primary is None:
         return local, EngineTrace(provider="local", model=getattr(local, "model", ""))
     trace = EngineTrace(provider=engine.provider, model=engine.model)
+    if not allow_fallback:
+        return primary, trace
     return FallbackLlm(primary, local, trace), trace
 
 

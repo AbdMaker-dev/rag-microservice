@@ -16,7 +16,7 @@ from app.core.engines import EngineTrace, resolve_llm
 from app.models.schemas import EngineUsed
 
 
-def engine_for(body, request: Request):
+def engine_for(body, request: Request, *, allow_fallback: bool = True):
     """(llm, trace) pour cette demande."""
 
     return resolve_llm(
@@ -25,6 +25,7 @@ def engine_for(body, request: Request):
         # reste alors celui du composant.
         getattr(request.app.state, "llm", None),
         getattr(request.app.state, "http", None),
+        allow_fallback=allow_fallback,
     )
 
 

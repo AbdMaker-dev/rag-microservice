@@ -185,3 +185,38 @@ def test_des_formules_bien_fermees_ne_signalent_rien():
     result = asyncio.run(audit_course(text="Un cours.", llm=ScriptedLlm(["### AUCUN"]),
                                       timeout=10, num_ctx=8192, sections=sections))
     assert not [f for f in result.findings if "sans leur paire" in f.explanation]
+
+
+def test_un_relecteur_qui_refuse_arrete_tout_de_suite():
+    """20/09/2026 : Claude refusait en une seconde (crédit épuisé), le repli
+    local tournait quinze minutes, et le professeur lisait « non vérifié »."""
+
+    from app.core.course_audit import AuditFailed
+    from app.core.llm import GenerationError
+
+    class _Refuse:
+        model = "claude-opus-5"
+        appels = 0
+
+        async def chat(self, messages, **kwargs):
+            _Refuse.appels += 1
+            raise GenerationError("Claude a répondu 400 : credit balance is too low")
+
+    long = "\n\n".join([COURS] * 6)  # plusieurs parts
+    try:
+        asyncio.run(audit_course(text=long, llm=_Refuse(), timeout=10, num_ctx=8192))
+        raise AssertionError("l'audit aurait dû s'arrêter")
+    except AuditFailed as erreur:
+        assert "credit balance" in str(erreur)
+    assert _Refuse.appels == 1  # on n'insiste pas part après part
+
+
+def test_la_relecture_n_a_pas_de_repli_local():
+    """Un modèle local ne vérifie pas des maths : mieux vaut dire non."""
+
+    import inspect
+
+    from app.api import routes_generate
+
+    source = inspect.getsource(routes_generate.course_audit)
+    assert "allow_fallback=False" in source

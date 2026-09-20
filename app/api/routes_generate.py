@@ -525,7 +525,8 @@ async def course_audit(
     ambiguïté). Rien n'est corrigé ; le statut se lit sur GET /generate/{jobId}.
     """
 
-    engine_llm, trace = engine_for(body, request)
+    # Pas de repli local pour la relecture : voir resolve_llm.
+    engine_llm, trace = engine_for(body, request, allow_fallback=False)
     job = submit_traced(
         request,
         trace,
