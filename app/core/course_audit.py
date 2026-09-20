@@ -93,6 +93,42 @@ def _parts(text: str) -> List[str]:
     return parts
 
 
+_OUVRANTS = (r"\\(", r"\\[")
+_FERMANTS = (r"\\)", r"\\]")
+
+
+def _delimiteurs_orphelins(sections: List[dict]) -> List[AuditFinding]:
+    """Une formule jamais refermée : l'élève lit des antislashs.
+
+    Constaté le 20/09/2026 dans « Nombres complexes » : 44 « \\( » pour 43
+    « \\) » dans une section. L'écran peut l'afficher proprement, il ne peut
+    pas la réparer — c'est le texte qui est faux, et c'est certain : ça se
+    compte, ça ne s'interprète pas.
+    """
+
+    trouves = []
+    for section in sections:
+        contenu = str(section.get("content") or "")
+        for ouvrant, fermant in zip(_OUVRANTS, _FERMANTS):
+            manquants = contenu.count(ouvrant) - contenu.count(fermant)
+            if manquants == 0:
+                continue
+            trop = "ouverte" if manquants > 0 else "fermée"
+            trouves.append(AuditFinding(
+                severity="certaine", source="calcul",
+                excerpt=f"{section.get('heading') or 'Section'}",
+                explanation=(
+                    f"{abs(manquants)} formule(s) {trop}(s) sans leur paire : "
+                    f"« {ouvrant} » apparaît {contenu.count(ouvrant)} fois et "
+                    f"« {fermant} » {contenu.count(fermant)} fois. L'élève voit "
+                    "les antislashs au milieu du texte."
+                ),
+                target={"kind": "section", "id": section.get("id"),
+                        "heading": section.get("heading")},
+            ))
+    return trouves
+
+
 def _target_of(excerpt: str, sections: List[dict]) -> Optional[dict]:
     """La section qui contient CE passage, une seule fois.
 
@@ -184,6 +220,8 @@ async def audit_course(
                 target={"kind": "quiz", "id": quiz.get("id"), "index": number - 1},
                 suggested_answer=annoncee_index,
             ))
+    result.findings.extend(_delimiteurs_orphelins(list(sections)))
+
     blocks = _blocks_text(list(quizzes), list(exercises))
     if blocks:
         text = f"{text}\n\n{blocks}"

@@ -165,3 +165,23 @@ def test_le_statut_d_une_tache_d_un_autre_genre_ne_plante_pas():
     assert reponse.status == "done"
     assert reponse.warnings == ["RESULT_KIND_UNEXPECTED"]
     assert reponse.title is None
+
+
+def test_une_formule_jamais_refermee_est_une_erreur_certaine():
+    """20/09/2026 : « Nombres complexes » avait 44 « \\( » pour 43 « \\) ».
+    L'écran peut l'afficher proprement, il ne peut pas la réparer."""
+
+    sections = [{"id": "sec-1", "heading": "Module", "content": r"On a \( a+b \) puis \( c+d."}]
+    result = asyncio.run(audit_course(text="Un cours.", llm=ScriptedLlm(["### AUCUN"]),
+                                      timeout=10, num_ctx=8192, sections=sections))
+    trouve = [f for f in result.findings if "sans leur paire" in f.explanation]
+    assert len(trouve) == 1
+    assert trouve[0].severity == "certaine"
+    assert trouve[0].target == {"kind": "section", "id": "sec-1", "heading": "Module"}
+
+
+def test_des_formules_bien_fermees_ne_signalent_rien():
+    sections = [{"id": "s", "heading": "H", "content": r"\( a \) et \[ b \] et \( c \)"}]
+    result = asyncio.run(audit_course(text="Un cours.", llm=ScriptedLlm(["### AUCUN"]),
+                                      timeout=10, num_ctx=8192, sections=sections))
+    assert not [f for f in result.findings if "sans leur paire" in f.explanation]
