@@ -816,8 +816,17 @@ class AuditRequest(Wire):
     # l'explication fait compter faux l'élève qui répond juste.
     quizzes: List[Dict[str, Any]] = Field(default_factory=list, max_length=50)
     exercises: List[Dict[str, Any]] = Field(default_factory=list, max_length=50)
+    # Les sections, pour dire au professeur OÙ corriger : { id, heading, content }.
+    sections: List[Dict[str, Any]] = Field(default_factory=list, max_length=100)
     # Moteur IA du pays pour l'usage RELECTURE — absent : modèle local.
     engine: Optional[EngineChoice] = None
+
+
+class AuditTarget(Wire):
+    kind: Literal["section", "quiz", "exercice"]
+    id: Optional[str] = None
+    heading: Optional[str] = None
+    index: Optional[int] = None
 
 
 class AuditFindingOut(Wire):
@@ -827,6 +836,10 @@ class AuditFindingOut(Wire):
     excerpt: str
     explanation: str
     correction: str = ""
+    # Où corriger, quand on a pu le désigner sans ambiguïté.
+    target: Optional[AuditTarget] = None
+    # Quiz contradictoire : la réponse annoncée par l'explication (0-3).
+    suggested_answer: Optional[int] = None
 
 
 class CourseAudit(Wire):

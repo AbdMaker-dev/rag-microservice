@@ -30,6 +30,7 @@ from app.core.generation import (
 from app.models.schemas import (
     AuditFindingOut,
     AuditRequest,
+    AuditTarget,
     CourseAudit,
     AdjustRequest,
     AssessmentDraft,
@@ -170,6 +171,8 @@ async def _generation_status(job_id: str, request: Request) -> GenerateStatus:
                     AuditFindingOut(
                         severity=f.severity, source=f.source, excerpt=f.excerpt,
                         explanation=f.explanation, correction=f.correction,
+                        target=AuditTarget(**f.target) if f.target else None,
+                        suggested_answer=f.suggested_answer,
                     )
                     for f in audit.findings
                 ]
@@ -519,6 +522,7 @@ async def course_audit(
             num_ctx=settings.generation_context_tokens,
             quizzes=body.quizzes,
             exercises=body.exercises,
+            sections=body.sections,
         ),
         lane="prof",
     )

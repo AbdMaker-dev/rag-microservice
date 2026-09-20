@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import List
+from typing import Dict, List, Optional
 
 from app.core.llm import GenerationError, LlmProvider
 from app.core.math_check import check as check_calculations
@@ -60,6 +60,12 @@ class AuditFinding:
     excerpt: str
     explanation: str
     correction: str = ""
+    # OÙ corriger : { kind: "section"|"quiz"|"exercice", id?, index? }. Sans
+    # cible, le professeur devrait chercher lui-même le passage.
+    target: Optional[dict] = None
+    # Pour un quiz dont la réponse contredit son explication : la réponse
+    # que l'explication annonce (0-3), applicable en un clic.
+    suggested_answer: Optional[int] = None
 
 
 @dataclass
@@ -85,6 +91,22 @@ def _parts(text: str) -> List[str]:
     if current.strip():
         parts.append(current)
     return parts
+
+
+def _target_of(excerpt: str, sections: List[dict]) -> Optional[dict]:
+    """La section qui contient CE passage, une seule fois.
+
+    Deux sections qui le contiennent : on ne désigne rien plutôt que de
+    faire corriger la mauvaise.
+    """
+
+    quote = _normalise(excerpt.strip(" «»\"'"))
+    if len(quote) < 12:
+        return None
+    trouves = [s for s in sections if _normalise(str(s.get("content") or "")).count(quote) == 1]
+    if len(trouves) != 1:
+        return None
+    return {"kind": "section", "id": trouves[0].get("id"), "heading": trouves[0].get("heading")}
 
 
 _BLOCK = re.compile(r"^\s*#{2,4}\s*PROBL[ÈE]ME\s*$", re.IGNORECASE | re.MULTILINE)
@@ -138,6 +160,7 @@ def _blocks_text(quizzes: List[dict], exercises: List[dict]) -> str:
 async def audit_course(
     *, text: str, llm: LlmProvider, timeout: float, num_ctx: int,
     quizzes: List[dict] = (), exercises: List[dict] = (),
+    sections: List[dict] = (),
 ) -> AuditResult:
     result = AuditResult(findings=[])
 
@@ -146,7 +169,8 @@ async def audit_course(
 
     for number, quiz in enumerate(quizzes, start=1):
         if _quiz_contredit(quiz):
-            annoncee = "ABCD"[reponse_annoncee(str(quiz.get("explanation") or ""))]
+            annoncee_index = reponse_annoncee(str(quiz.get("explanation") or ""))
+            annoncee = "ABCD"[annoncee_index]
             enregistree = quiz.get("answer")
             result.findings.append(AuditFinding(
                 severity="certaine", source="calcul",
@@ -156,16 +180,21 @@ async def audit_course(
                     f"{'ABCD'[enregistree] if isinstance(enregistree, int) and 0 <= enregistree < 4 else enregistree}, "
                     f"mais l'explication annonce {annoncee}. Un élève qui répond juste est compté faux."
                 ),
+                correction=f"Bonne réponse : {annoncee}",
+                target={"kind": "quiz", "id": quiz.get("id"), "index": number - 1},
+                suggested_answer=annoncee_index,
             ))
     blocks = _blocks_text(list(quizzes), list(exercises))
     if blocks:
         text = f"{text}\n\n{blocks}"
 
     for finding in check_calculations(text):
+        extrait = finding.message.split(" » ")[0].lstrip("« ")
         result.findings.append(AuditFinding(
             severity="certaine", source="calcul",
-            excerpt=finding.message.split(" » ")[0].lstrip("« "),
+            excerpt=extrait,
             explanation=finding.message,
+            target=_target_of(extrait, list(sections)),
         ))
 
     for part in _parts(text):
@@ -186,11 +215,13 @@ async def audit_course(
                 result.warnings.append("AUDIT_QUOTE_NOT_FOUND")
                 continue
             severity = values.get("gravite", "").strip().lower()
+            extrait = values["extrait"].strip(" «»\"'")
             result.findings.append(AuditFinding(
                 severity="ambiguite" if severity.startswith("ambig") else "probable",
                 source="relecture",
-                excerpt=values["extrait"].strip(" «»\"'"),
+                excerpt=extrait,
                 explanation=values["explication"],
                 correction=values.get("correction", ""),
+                target=_target_of(extrait, list(sections)),
             ))
     return result

@@ -94,3 +94,35 @@ def test_un_quiz_qui_contredit_son_explication_est_une_erreur_certaine():
     certain = [f for f in result.findings if f.severity == "certaine"]
     assert len(certain) == 1
     assert "enregistrée est A" in certain[0].explanation and "annonce C" in certain[0].explanation
+
+
+SECTIONS = [
+    {"id": "sec-1", "heading": "Module et argument", "content": COURS},
+    {"id": "sec-2", "heading": "Autre section", "content": "Rien à signaler ici."},
+]
+
+
+def test_un_signalement_dit_quelle_section_corriger():
+    result = asyncio.run(audit_course(text=COURS, llm=ScriptedLlm([QUADRANT]), timeout=10,
+                                      num_ctx=8192, sections=SECTIONS))
+    relecture = [f for f in result.findings if f.source == "relecture"][0]
+    assert relecture.target == {"kind": "section", "id": "sec-1", "heading": "Module et argument"}
+
+
+def test_un_passage_present_dans_deux_sections_ne_designe_rien():
+    """Désigner la mauvaise section ferait corriger au prof ce qui était juste."""
+
+    doubles = SECTIONS[:1] + [{"id": "sec-3", "heading": "Copie", "content": COURS}]
+    result = asyncio.run(audit_course(text=COURS, llm=ScriptedLlm([QUADRANT]), timeout=10,
+                                      num_ctx=8192, sections=doubles))
+    assert [f for f in result.findings if f.source == "relecture"][0].target is None
+
+
+def test_un_quiz_contradictoire_propose_la_reponse_annoncee():
+    quiz = {"id": "q-1", "question": "Forme de -1 + i ?", "choices": ["a", "b", "c", "d"],
+            "answer": 0, "explanation": "La réponse correcte est C) √2 e^{i3π/4}."}
+    result = asyncio.run(audit_course(text="Un cours.", llm=ScriptedLlm(["### AUCUN"]),
+                                      timeout=10, num_ctx=8192, quizzes=[quiz]))
+    trouve = [f for f in result.findings if f.severity == "certaine"][0]
+    assert trouve.suggested_answer == 2
+    assert trouve.target == {"kind": "quiz", "id": "q-1", "index": 0}
