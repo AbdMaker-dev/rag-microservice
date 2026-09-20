@@ -523,6 +523,7 @@ async def course_audit(
             quizzes=body.quizzes,
             exercises=body.exercises,
             sections=body.sections,
+            title=body.title,
         ),
         lane="prof",
     )

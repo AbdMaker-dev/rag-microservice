@@ -160,7 +160,7 @@ def _blocks_text(quizzes: List[dict], exercises: List[dict]) -> str:
 async def audit_course(
     *, text: str, llm: LlmProvider, timeout: float, num_ctx: int,
     quizzes: List[dict] = (), exercises: List[dict] = (),
-    sections: List[dict] = (),
+    sections: List[dict] = (), title: str = "",
 ) -> AuditResult:
     result = AuditResult(findings=[])
 
@@ -201,7 +201,10 @@ async def audit_course(
         try:
             raw = await llm.chat(
                 [{"role": "system", "content": _SYSTEM},
-                 {"role": "user", "content": f"Cours à corriger :\n\n{part}"}],
+                 {"role": "user", "content": (
+                     (f"Cours : {title}\n\n" if title else "")
+                     + f"Passage à corriger :\n\n{part}"
+                 )}],
                 timeout=timeout, num_ctx=num_ctx, num_predict=_OUTPUT_TOKENS,
             )
         except GenerationError:

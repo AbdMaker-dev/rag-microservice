@@ -126,3 +126,13 @@ def test_un_quiz_contradictoire_propose_la_reponse_annoncee():
     trouve = [f for f in result.findings if f.severity == "certaine"][0]
     assert trouve.suggested_answer == 2
     assert trouve.target == {"kind": "quiz", "id": "q-1", "index": 0}
+
+
+def test_le_titre_du_cours_est_donne_au_correcteur():
+    """Management l'envoie, et il aide : « premier quadrant » se juge mieux
+    en sachant qu'on lit un cours sur les nombres complexes."""
+
+    llm = ScriptedLlm(["### AUCUN"])
+    asyncio.run(audit_course(text=COURS, llm=llm, timeout=10, num_ctx=8192,
+                             title="Nombres complexes"))
+    assert "Cours : Nombres complexes" in llm.exchanges[0][-1]["content"]

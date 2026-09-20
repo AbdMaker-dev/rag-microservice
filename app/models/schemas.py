@@ -810,6 +810,9 @@ class AuditRequest(Wire):
 
     request_id: str
     course_id: str = Field(min_length=1, max_length=255)
+    # Le titre du cours : le correcteur juge mieux « premier quadrant » en
+    # sachant qu'il lit un cours sur les nombres complexes.
+    title: str = Field(default="", max_length=300)
     scope: Scope
     text: str = Field(min_length=1, max_length=120_000)
     # Les blocs du cours, relus eux aussi : un quiz dont la réponse contredit
