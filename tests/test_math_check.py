@@ -16,7 +16,8 @@ NOTE = (r"On a \( 2e^{i\pi/3} = 2\left(\frac{1}{2} + i\frac{\sqrt{3}}{2}\right) 
 def test_l_erreur_de_la_note_est_attrapee_avec_la_valeur_exacte():
     findings = check(NOTE)
     assert len(findings) == 1
-    assert "√3" in findings[0].message and "pas (1, 3)" in findings[0].message
+    # Rendu en LaTeX : l'écran du prof affiche la formule, pas du texte brut.
+    assert "\\sqrt{3}" in findings[0].message and "pas \\( (1, 3) \\)" in findings[0].message
 
 
 def test_une_egalite_chiffree_fausse_est_attrapee():

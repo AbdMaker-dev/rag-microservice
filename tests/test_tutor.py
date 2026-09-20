@@ -523,7 +523,7 @@ def test_un_calcul_faux_est_renvoye_en_correction_avec_la_valeur_sure():
     assert "MATH_CHECK_RETRIED" in answer.warnings
     assert "MATH_CHECK_STILL_WRONG" not in answer.warnings
     relance = llm.messages_seen[1][-1]["content"]
-    assert "logiciel de calcul" in relance and "√3" in relance
+    assert "logiciel de calcul" in relance and "\\sqrt{3}" in relance
 
 
 def test_un_calcul_toujours_faux_est_signale_sans_boucler():

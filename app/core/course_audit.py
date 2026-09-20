@@ -189,7 +189,10 @@ async def audit_course(
         text = f"{text}\n\n{blocks}"
 
     for finding in check_calculations(text):
-        extrait = finding.message.split(" » ")[0].lstrip("« ")
+        # L'extrait est la formule, RENDUE : « \( … \) ». Sans délimiteurs,
+        # l'écran du professeur affiche du LaTeX brut, illisible (20/09/2026).
+        entre = re.search(r"\\\((.+?)\\\)", finding.message, re.DOTALL)
+        extrait = f"\\( {entre.group(1).strip()} \\)" if entre else finding.message
         result.findings.append(AuditFinding(
             severity="certaine", source="calcul",
             excerpt=extrait,

@@ -208,9 +208,10 @@ def _exact(number: float) -> str:
         guess = sympy.nsimplify(number, [sympy.sqrt(2), sympy.sqrt(3), sympy.sqrt(5), sympy.pi],
                                 tolerance=1e-9)
         if abs(float(guess) - number) < 1e-9:
-            text = str(guess).replace("sqrt(", "√(").replace("*", "")
-            text = re.sub(r"√\((\d+)\)", r"√\1", text)
-            return text if text == f"{number:g}" else f"{text} (≈ {number:.4g})"
+            # En LaTeX : l'extrait et l'explication sont rendus par l'écran,
+            # et « √3 » y resterait du texte brut au milieu d'une formule.
+            text = re.sub(r"sqrt\((\d+)\)", r"\\sqrt{\1}", str(guess)).replace("*", " ")
+            return text if text == f"{number:g}" else f"{text} \\approx {number:.4g}"
     except Exception:  # noqa: BLE001
         pass
     return f"{number:.4g}"
@@ -236,8 +237,9 @@ def _equalities(text: str) -> List[Finding]:
             if left is None or right is None or _close(left, right):
                 continue
             findings.append(Finding(
-                f"« {parts[index].strip()} = {parts[index + 1].strip()} » est faux : "
-                f"le côté gauche vaut {_show(left)}, le côté droit {_show(right)}."
+                f"L'égalité \\( {parts[index].strip()} = {parts[index + 1].strip()} \\) "
+                f"est fausse : le côté gauche vaut \\( {_show(left)} \\), "
+                f"le côté droit \\( {_show(right)} \\)."
             ))
     return findings
 
@@ -276,8 +278,8 @@ def _coordinates(text: str) -> List[Finding]:
         if _close(complex(value.real), x) and _close(complex(value.imag), y):
             continue
         findings.append(Finding(
-            f"Le point associé à {expression} a pour coordonnées "
-            f"({_exact(value.real)} ; {_exact(value.imag)}), pas {shown} : "
+            f"Le point associé à \\( {expression} \\) a pour coordonnées "
+            f"\\( ({_exact(value.real)} ; {_exact(value.imag)}) \\), pas \\( {shown} \\) : "
             "la partie réelle est l'abscisse, la partie imaginaire (sans le i) l'ordonnée."
         ))
     return findings
