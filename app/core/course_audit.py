@@ -93,8 +93,8 @@ def _parts(text: str) -> List[str]:
     return parts
 
 
-_OUVRANTS = (r"\\(", r"\\[")
-_FERMANTS = (r"\\)", r"\\]")
+_OUVRANTS = (r"\(", r"\[")
+_FERMANTS = (r"\)", r"\]")
 
 
 def _delimiteurs_orphelins(sections: List[dict]) -> List[AuditFinding]:
