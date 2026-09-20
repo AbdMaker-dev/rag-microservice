@@ -54,7 +54,29 @@ S'il n'y a aucun problème, écris seulement : ### AUCUN"""
 
 
 class AuditFailed(RuntimeError):
-    """Le relecteur n'a pas pu se prononcer ; le message est montrable."""
+    """Le relecteur n'a pas pu se prononcer ; le message est montrable.
+
+    `code` dit la CAUSE sans qu'on ait à reconnaître une phrase : un écran
+    qui lit une phrase casse à la première reformulation.
+    """
+
+    def __init__(self, message: str, code: str = "relecteur_muet") -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def _cause(erreur: Exception) -> str:
+    """Le code de cause, lu sur la réponse du fournisseur."""
+
+    texte = str(erreur).lower()
+    statut = getattr(erreur, "status", 0)
+    if "credit balance" in texte or "quota" in texte or statut == 429:
+        return "credit_epuise"
+    if statut in (401, 403) or "api key" in texte or "unauthorized" in texte:
+        return "cle_refusee"
+    if statut in (404,) or "no longer available" in texte:
+        return "modele_indisponible"
+    return "relecteur_muet"
 
 
 @dataclass(frozen=True)
@@ -258,7 +280,7 @@ async def audit_course(
             # professeur de longues minutes pour rendre un résultat partiel
             # qu'on ne croira pas (20/09/2026).
             logger.warning("relecture impossible : le relecteur ne répond pas", exc_info=True)
-            raise AuditFailed(str(erreur)) from erreur
+            raise AuditFailed(str(erreur), _cause(erreur)) from erreur
         for values in _read(raw):
             if not _quote_in(values["extrait"], part):
                 # Le correcteur cite une phrase qui n'est pas dans le cours :

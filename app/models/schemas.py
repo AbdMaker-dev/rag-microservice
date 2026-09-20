@@ -901,6 +901,9 @@ class GenerateStatus(Wire):
     error: Optional[str] = None
     engine: Optional[EngineUsed] = None
     audit: Optional[CourseAudit] = None
+    # La cause d'un échec : credit_epuise | cle_refusee | modele_indisponible
+    # | relecteur_muet. À lire plutôt que la phrase de `error`.
+    error_code: Optional[str] = None
 
 
 # ---------------------------------------------------------------------- answer

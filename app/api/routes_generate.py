@@ -113,6 +113,7 @@ async def _generation_status(job_id: str, request: Request) -> GenerateStatus:
             job_id=job.id,
             status=job.status,
             error=job.error,
+            error_code=job.error_code,
             queue_position=store.position(job) or None,
             wait_seconds=store.wait_seconds(job),
         )

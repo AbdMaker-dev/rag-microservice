@@ -58,6 +58,9 @@ class Job:
     finished_at: Optional[datetime] = None
     # Le moteur IA de la tâche (trace de ce qui a réellement écrit).
     engine: Optional[object] = None
+    # La CAUSE d'un échec, quand elle est connue (« credit_epuise »…) : un
+    # appelant ne doit pas avoir à reconnaître une phrase pour agir.
+    error_code: Optional[str] = None
 
 
 class JobStore:
@@ -178,6 +181,7 @@ class JobStore:
             # Le message est montré au professeur : jamais de trace brute.
             logger.exception("tâche échouée", extra={"job": job.id})
             job.error = str(error)
+            job.error_code = getattr(error, "code", None)
             job.status = "failed"
         finally:
             job.finished_at = datetime.now(timezone.utc)

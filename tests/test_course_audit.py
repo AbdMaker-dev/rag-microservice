@@ -220,3 +220,30 @@ def test_la_relecture_n_a_pas_de_repli_local():
 
     source = inspect.getsource(routes_generate.course_audit)
     assert "allow_fallback=False" in source
+
+
+def test_l_echec_dit_sa_cause_par_un_code():
+    """Un écran qui reconnaît une phrase casse à la première reformulation."""
+
+    from app.core.course_audit import AuditFailed
+    from app.core.engines import EngineError
+
+    cas = [
+        (EngineError("Claude a répondu 400 : Your credit balance is too low", 400), "credit_epuise"),
+        (EngineError("GEMINI a répondu 429 : You exceeded your current quota", 429), "credit_epuise"),
+        (EngineError("Claude a répondu 401 : invalid x-api-key", 401), "cle_refusee"),
+        (EngineError("GEMINI a répondu 404 : model no longer available", 404), "modele_indisponible"),
+        (EngineError("Claude a répondu 502 : bad gateway", 502), "relecteur_muet"),
+    ]
+    for erreur, attendu in cas:
+        class _Refuse:
+            model = "x"
+
+            async def chat(self, messages, **kwargs):
+                raise erreur
+
+        try:
+            asyncio.run(audit_course(text=COURS, llm=_Refuse(), timeout=10, num_ctx=8192))
+            raise AssertionError("l'audit aurait dû s'arrêter")
+        except AuditFailed as levee:
+            assert levee.code == attendu, (str(erreur), levee.code)
