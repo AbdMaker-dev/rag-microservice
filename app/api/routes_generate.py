@@ -208,6 +208,20 @@ async def _generation_status(job_id: str, request: Request) -> GenerateStatus:
             warnings=blocks.warnings,
         )
 
+    if not isinstance(job.result, GeneratedCourse):
+        # Une tâche d'un autre genre (l'audio d'une section, par exemple) :
+        # son état se lit sur SA route. Constaté le 20/09/2026 — management
+        # sondait ici l'audio d'une section, et cette route répondait 500 :
+        # le professeur voyait « en cours » pour toujours. On répond ce qu'on
+        # sait, sans prétendre rendre un cours.
+        logger.warning(
+            "statut demandé ici pour une tâche d'un autre genre",
+            extra={"job": job.id, "genre": type(job.result).__name__},
+        )
+        return GenerateStatus(
+            job_id=job.id, status=job.status, warnings=["RESULT_KIND_UNEXPECTED"]
+        )
+
     course: GeneratedCourse = job.result  # type: ignore[assignment]
     return GenerateStatus(
         job_id=job.id,

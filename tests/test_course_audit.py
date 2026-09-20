@@ -136,3 +136,32 @@ def test_le_titre_du_cours_est_donne_au_correcteur():
     asyncio.run(audit_course(text=COURS, llm=llm, timeout=10, num_ctx=8192,
                              title="Nombres complexes"))
     assert "Cours : Nombres complexes" in llm.exchanges[0][-1]["content"]
+
+
+def test_le_statut_d_une_tache_d_un_autre_genre_ne_plante_pas():
+    """20/09/2026 : management sondait ici l'audio d'une section ; la route
+    répondait 500 et le professeur voyait « en cours » pour toujours."""
+
+    from types import SimpleNamespace
+
+    from app.api.routes_generate import _generation_status
+    from app.core.jobs import JobStore
+
+    async def scenario():
+        jobs = JobStore()
+
+        async def audio():
+            return object()  # ni cours, ni bloc, ni audit
+
+        job = jobs.submit(audio, lane="prof")
+        for _ in range(50):
+            if job.status in ("done", "failed"):
+                break
+            await asyncio.sleep(0.02)
+        requete = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(jobs=jobs)))
+        return await _generation_status(job.id, requete)
+
+    reponse = asyncio.run(scenario())
+    assert reponse.status == "done"
+    assert reponse.warnings == ["RESULT_KIND_UNEXPECTED"]
+    assert reponse.title is None
